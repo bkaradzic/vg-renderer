@@ -4010,7 +4010,7 @@ static uint32_t allocIndices(Context* ctx, uint32_t numIndices)
 	if (ib->m_Count + numIndices > ib->m_Capacity) {
 		const uint32_t nextCapacity = ib->m_Capacity != 0 ? (ib->m_Capacity * 3) / 2 : 32;
 
-		ib->m_Capacity = bx::uint32_max(nextCapacity, ib->m_Count + numIndices);
+		ib->m_Capacity = bx::max(nextCapacity, ib->m_Count + numIndices);
 		ib->m_Indices = (uint16_t*)bx::alignedRealloc(ctx->m_Allocator, ib->m_Indices, sizeof(uint16_t) * ib->m_Capacity, 16);
 	}
 

@@ -296,7 +296,7 @@ void pathRoundedRect(Path* path, float x, float y, float w, float h, float r)
 	r = bx::min<float>(rx, ry);
 
 	const float da = bx::acos((path->m_Scale * r) / ((path->m_Scale * r) + path->m_TesselationTolerance)) * 2.0f;
-	const uint32_t numPointsHalfCircle = bx::uint32_max(2, (uint32_t)bx::ceil(bx::kPi / da));
+	const uint32_t numPointsHalfCircle = bx::max(2, (uint32_t)bx::ceil(bx::kPi / da));
 	const uint32_t numPointsQuarterCircle = (numPointsHalfCircle >> 1) + 1;
 
 	const float dtheta = -bx::kPiHalf / (float)(numPointsQuarterCircle - 1);
@@ -421,7 +421,7 @@ void pathRoundedRectVarying(Path* path, float x, float y, float w, float h, floa
 		pathMoveTo(path, x + rtl, y);
 
 		const float halfDa = bx::acos((path->m_Scale * rtl) / ((path->m_Scale * rtl) + path->m_TesselationTolerance));
-		const uint32_t numPointsHalfCircle = bx::uint32_max(2, (uint32_t)bx::ceil(bx::kPiHalf / halfDa));
+		const uint32_t numPointsHalfCircle = bx::max(2, (uint32_t)bx::ceil(bx::kPiHalf / halfDa));
 		const uint32_t numPointsQuarterCircle = (numPointsHalfCircle >> 1) + 1;
 
 		const float dtheta = -bx::kPiHalf / (float)(numPointsQuarterCircle - 1);
@@ -454,7 +454,7 @@ void pathRoundedRectVarying(Path* path, float x, float y, float w, float h, floa
 		pathLineTo(path, x, y + h - rbl);
 
 		const float halfDa = bx::acos((path->m_Scale * rbl) / ((path->m_Scale * rbl) + path->m_TesselationTolerance));
-		const uint32_t numPointsHalfCircle = bx::uint32_max(2, (uint32_t)bx::ceil(bx::kPiHalf / halfDa));
+		const uint32_t numPointsHalfCircle = bx::max(2, (uint32_t)bx::ceil(bx::kPiHalf / halfDa));
 		const uint32_t numPointsQuarterCircle = (numPointsHalfCircle >> 1) + 1;
 
 		const float dtheta = -bx::kPiHalf / (float)(numPointsQuarterCircle - 1);
@@ -487,7 +487,7 @@ void pathRoundedRectVarying(Path* path, float x, float y, float w, float h, floa
 		pathLineTo(path, x + w - rbr, y + h);
 
 		const float halfDa = bx::acos((path->m_Scale * rbr) / ((path->m_Scale * rbr) + path->m_TesselationTolerance));
-		const uint32_t numPointsHalfCircle = bx::uint32_max(2, (uint32_t)bx::ceil(bx::kPiHalf / halfDa));
+		const uint32_t numPointsHalfCircle = bx::max(2, (uint32_t)bx::ceil(bx::kPiHalf / halfDa));
 		const uint32_t numPointsQuarterCircle = (numPointsHalfCircle >> 1) + 1;
 
 		const float dtheta = -bx::kPiHalf / (float)(numPointsQuarterCircle - 1);
@@ -520,7 +520,7 @@ void pathRoundedRectVarying(Path* path, float x, float y, float w, float h, floa
 		pathLineTo(path, x + w, y + rtr);
 
 		const float halfDa = bx::acos((path->m_Scale * rtr) / ((path->m_Scale * rtr) + path->m_TesselationTolerance));
-		const uint32_t numPointsHalfCircle = bx::uint32_max(2, (uint32_t)bx::ceil(bx::kPiHalf / halfDa));
+		const uint32_t numPointsHalfCircle = bx::max(2, (uint32_t)bx::ceil(bx::kPiHalf / halfDa));
 		const uint32_t numPointsQuarterCircle = (numPointsHalfCircle >> 1) + 1;
 
 		const float dtheta = -bx::kPiHalf / (float)(numPointsQuarterCircle - 1);
@@ -556,7 +556,7 @@ void pathCircle(Path* path, float cx, float cy, float r)
 #else
 	const float da = bx::acos((path->m_Scale * r) / ((path->m_Scale * r) + path->m_TesselationTolerance)) * 2.0f;
 
-	const uint32_t numPointsHalfCircle = bx::uint32_max(2, (uint32_t)bx::ceil(bx::kPi / da));
+	const uint32_t numPointsHalfCircle = bx::max(2, (uint32_t)bx::ceil(bx::kPi / da));
 	const uint32_t numPoints = (numPointsHalfCircle * 2);
 
 	pathMoveTo(path, cx + r, cy);
@@ -592,7 +592,7 @@ void pathEllipse(Path* path, float cx, float cy, float rx, float ry)
 	const float avgR = (rx + ry) * 0.5f;
 	const float da = bx::acos((path->m_Scale * avgR) / ((path->m_Scale * avgR) + path->m_TesselationTolerance)) * 2.0f;
 
-	const uint32_t numPointsHalfCircle = bx::uint32_max(2, (uint32_t)bx::ceil(bx::kPi / da));
+	const uint32_t numPointsHalfCircle = bx::max(2, (uint32_t)bx::ceil(bx::kPi / da));
 	const uint32_t numPoints = (numPointsHalfCircle * 2);
 
 	pathMoveTo(path, cx + rx, cy);
@@ -643,7 +643,7 @@ void pathArc(Path* path, float cx, float cy, float r, float a0, float a1, Windin
 	}
 
 	const float da = bx::acos((path->m_Scale * r) / ((path->m_Scale * r) + path->m_TesselationTolerance)) * 2.0f;
-	const uint32_t numPoints = bx::uint32_max(2, (uint32_t)bx::ceil(bx::abs(a1 - a0) / da));
+	const uint32_t numPoints = bx::max(2, (uint32_t)bx::ceil(bx::abs(a1 - a0) / da));
 
 	const float dtheta = (a1 - a0) / (float)numPoints;
 	const float cos_dtheta = bx::cos(dtheta);
@@ -739,7 +739,7 @@ uint32_t pathGetNumSubPaths(const Path* path)
 static float* pathAllocVertices(Path* path, uint32_t n)
 {
 	if (path->m_NumVertices + n > path->m_VertexCapacity) {
-		path->m_VertexCapacity = bx::uint32_max(path->m_VertexCapacity + n, path->m_VertexCapacity != 0 ? (path->m_VertexCapacity * 3) >> 1 : 16);
+		path->m_VertexCapacity = bx::max(path->m_VertexCapacity + n, path->m_VertexCapacity != 0 ? (path->m_VertexCapacity * 3) >> 1 : 16);
 		path->m_Vertices = (float*)bx::alignedRealloc(path->m_Allocator, path->m_Vertices, sizeof(float) * 2 * path->m_VertexCapacity, 16);
 	}
 

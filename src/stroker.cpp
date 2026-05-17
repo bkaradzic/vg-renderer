@@ -52,74 +52,74 @@ inline Vec2 calcExtrusionVector(const Vec2& d01, const Vec2& d12)
 	return v;
 }
 
-#if VG_CONFIG_ENABLE_SIMD && BX_CPU_X86
-static const __m128 vec2_perpCCW_xorMask = _mm_castsi128_ps(_mm_set_epi32(0, 0, 0, 0x80000000));
+#if VG_CONFIG_ENABLE_SIMD
+static const bx::simd128_t vec2_perpCCW_xorMask = bx::simd128_ld(0x80000000u, 0u, 0u, 0u);
 
-static inline __m128 xmm_vec2_rotCCW90(const __m128 a)
+static inline bx::simd128_t xmm_vec2_rotCCW90(const bx::simd128_t a)
 {
-	__m128 ayx = _mm_shuffle_ps(a, a, _MM_SHUFFLE(3, 2, 0, 1)); // { a.y, a.x, DC, DC }
-	return _mm_xor_ps(ayx, vec2_perpCCW_xorMask); // { -a.y, a.x, DC, DC }
+	const bx::simd128_t ayx    = bx::simd128_x32_swiz_yxzw(a); // { a.y, a.x, a.z, a.w }
+	const bx::simd128_t result = bx::simd128_xor(ayx, vec2_perpCCW_xorMask); // { -a.y, a.x, DC, DC }
+	return result;
 }
 
-static inline float xmm_vec2_cross(const __m128 a, const __m128 b)
+static inline float xmm_vec2_cross(const bx::simd128_t a, const bx::simd128_t b)
 {
-	const __m128 axy_bxy = _mm_movelh_ps(a, b); // { a.x, a.y, b.x, b.y }
-	const __m128 byx_ayx = _mm_shuffle_ps(axy_bxy, axy_bxy, _MM_SHUFFLE(0, 1, 2, 3)); // { b.y, b.x, a.y, a.x }
-	const __m128 axby_aybx = _mm_mul_ps(axy_bxy, byx_ayx); // { a.x * b.y, a.y * b.x, b.x * a.y, b.y * a.x }
-	const __m128 bxay = _mm_shuffle_ps(axby_aybx, axby_aybx, _MM_SHUFFLE(1, 1, 1, 1)); // { a.y * b.x, a.y * b.x, a.y * b.x, a.y * b.x }
-	const __m128 cross = _mm_sub_ss(axby_aybx, bxay);
-	return _mm_cvtss_f32(cross);
+	// a.x * b.y - a.y * b.x
+	const bx::simd128_t a_xy      = a;
+	const bx::simd128_t b_yx      = bx::simd128_x32_swiz_yxzw(b);
+	const bx::simd128_t axby_aybx = bx::simd128_f32_mul(a_xy, b_yx); // { a.x*b.y, a.y*b.x, DC, DC }
+	const bx::simd128_t aybx      = bx::simd128_x32_swiz_yyyy(axby_aybx);
+	const bx::simd128_t cross     = bx::simd128_f32_sub(axby_aybx, aybx);
+	return bx::simd128_f32_x(cross);
 }
 
-static inline __m128 xmm_vec2_dir(const __m128 a, const __m128 b)
+static inline bx::simd128_t xmm_vec2_dir(const bx::simd128_t a, const bx::simd128_t b)
 {
-	const __m128 dxy = _mm_sub_ps(b, a); // { dx, dy, DC, DC }
-	const __m128 dxySqr = _mm_mul_ps(dxy, dxy); // { dx * dx, dy * dy, DC, DC }
-	const __m128 dySqr = _mm_shuffle_ps(dxySqr, dxySqr, _MM_SHUFFLE(1, 1, 1, 1)); // { dy * dy, dy * dy, dy * dy, dy * dy }
-	const float lenSqr = _mm_cvtss_f32(_mm_add_ss(dxySqr, dySqr));
-	__m128 dir = _mm_setzero_ps();
-	if (lenSqr >= VG_EPSILON) {
-		const __m128 invLen = _mm_set_ps1(bx::rsqrt(lenSqr));
-		dir = _mm_mul_ps(dxy, invLen);
-	}
+	const bx::simd128_t dxy    = bx::simd128_f32_sub(b, a); // { dx, dy, DC, DC }
+	const bx::simd128_t dxySqr = bx::simd128_f32_mul(dxy, dxy); // { dx*dx, dy*dy, DC, DC }
+	const bx::simd128_t dySqr  = bx::simd128_x32_swiz_yyyy(dxySqr);
+	const bx::simd128_t lenSum = bx::simd128_f32_add(dxySqr, dySqr);
+	const float lenSqr   = bx::simd128_f32_x(lenSum);
+	const float invLenSc = (lenSqr >= VG_EPSILON) ? bx::rsqrt(lenSqr) : 0.0f;
+	const bx::simd128_t invLen = bx::simd128_splat(invLenSc);
+	const bx::simd128_t dir    = bx::simd128_f32_mul(dxy, invLen);
 	return dir;
 }
 
-static inline __m128 xmm_calcExtrusionVector(const __m128 d01, const __m128 d12)
+static inline bx::simd128_t xmm_calcExtrusionVector(const bx::simd128_t d01, const bx::simd128_t d12)
 {
 	const float cross = xmm_vec2_cross(d12, d01);
-#if 0
-	return (bx::abs(cross) > VG_EPSILON) ? _mm_mul_ps(_mm_sub_ps(d01, d12), _mm_set_ps1(rcp(cross))) : xmm_vec2_rotCCW90(d01);
-#else
-	return (bx::abs(cross) > VG_EPSILON) ? _mm_mul_ps(_mm_sub_ps(d01, d12), _mm_set_ps1(1.0f / cross)) : xmm_vec2_rotCCW90(d01);
-#endif
+	if (bx::abs(cross) > VG_EPSILON) {
+		const bx::simd128_t diff   = bx::simd128_f32_sub(d01, d12);
+		const bx::simd128_t invX   = bx::simd128_splat(1.0f / cross);
+		const bx::simd128_t result = bx::simd128_f32_mul(diff, invX);
+		return result;
+	}
+	return xmm_vec2_rotCCW90(d01);
 }
 
-static inline __m128 xmm_rsqrt(__m128 a)
+static inline bx::simd128_t xmm_rsqrt(bx::simd128_t a)
 {
 #if RSQRT_ALGORITHM == 0
-	const __m128 res = _mm_div_ps(xmm_one, _mm_sqrt_ps(a));
+	const bx::simd128_t one    = bx::simd128_splat(1.0f);
+	const bx::simd128_t sqrt_a = bx::simd128_f32_sqrt(a);
+	const bx::simd128_t res    = bx::simd128_f32_div(one, sqrt_a);
 #elif RSQRT_ALGORITHM == 1
-	const __m128 res = _mm_rsqrt_ps(a);
+	const bx::simd128_t res    = bx::simd128_f32_rsqrt_est(a);
 #elif RSQRT_ALGORITHM == 2
-	// Newton/Raphson
-	const __m128 rsqrtEst = _mm_rsqrt_ps(a);
-	const __m128 iter0 = _mm_mul_ps(a, rsqrtEst);
-	const __m128 iter1 = _mm_mul_ps(iter0, rsqrtEst);
-	const __m128 half_rsqrt = _mm_mul_ps(xmm_half, rsqrtEst);
-	const __m128 three_sub_iter1 = _mm_sub_ps(xmm_three, iter1);
-	const __m128 res = _mm_mul_ps(half_rsqrt, three_sub_iter1);
+	const bx::simd128_t res    = bx::simd128_f32_rsqrt_nr(a);
 #endif
 
 	return res;
 }
 
-static inline __m128 xmm_rcp(__m128 a)
+static inline bx::simd128_t xmm_rcp(bx::simd128_t a)
 {
 #if RCP_ALGORITHM == 0
-	const __m128 inv_a = _mm_div_ps(xmm_one, a);
+	const bx::simd128_t one   = bx::simd128_splat(1.0f);
+	const bx::simd128_t inv_a = bx::simd128_f32_div(one, a);
 #elif RCP_ALGORITHM == 1
-	const __m128 inv_a = _mm_rcp_ps(a);
+	const bx::simd128_t inv_a = bx::simd128_f32_rcp_est(a);
 #elif RCP_ALGORITHM == 2
 	// TODO:
 #endif
@@ -357,20 +357,22 @@ void strokerConvexFill(Stroker* stroker, Mesh* mesh, const float* vertexList, ui
 	mesh->m_NumIndices = stroker->m_NumIndices;
 }
 
-#if VG_CONFIG_ENABLE_SIMD && BX_CPU_X86
+#if VG_CONFIG_ENABLE_SIMD
 void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, uint32_t numVertices, uint32_t color)
 {
 	VG_CHECK(numVertices >= 3, "Invalid number of vertices");
 
 	const uint32_t lastVertexID = numVertices - 1;
 
-	const __m128 vtx0 = _mm_loadl_pi(_mm_setzero_ps(), (const __m64*)vertexList);
-	const __m128 vtx1 = _mm_loadl_pi(_mm_setzero_ps(), (const __m64*)(vertexList + 2));
-	const __m128 vtx2 = _mm_loadl_pi(_mm_setzero_ps(), (const __m64*)(vertexList + 4));
-	const float cross = xmm_vec2_cross(_mm_sub_ps(vtx1, vtx0), _mm_sub_ps(vtx2, vtx0));
+	const bx::simd128_t vtx0 = bx::simd128_ld(vertexList[0],     vertexList[1],     0.0f, 0.0f);
+	const bx::simd128_t vtx1 = bx::simd128_ld(vertexList[2],     vertexList[3],     0.0f, 0.0f);
+	const bx::simd128_t vtx2 = bx::simd128_ld(vertexList[4],     vertexList[5],     0.0f, 0.0f);
+	const bx::simd128_t d10  = bx::simd128_f32_sub(vtx1, vtx0);
+	const bx::simd128_t d20  = bx::simd128_f32_sub(vtx2, vtx0);
+	const float cross = xmm_vec2_cross(d10, d20);
 
 	const float aa = stroker->m_FringeWidth * 0.5f * bx::sign(cross);
-	const __m128 xmm_aa = _mm_set_ps1(aa);
+	const bx::simd128_t xmm_aa = bx::simd128_splat(aa);
 
 	const uint32_t c0 = colorSetAlpha(color, 0);
 
@@ -386,212 +388,231 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 	{
 		expandVB(stroker, numDrawVertices);
 
-		const __m128 vtxLast = _mm_loadl_pi(_mm_setzero_ps(), (const __m64*)(vertexList + (lastVertexID << 1)));
-		__m128 d01 = xmm_vec2_dir(vtxLast, vtx0);
-		__m128 p1 = vtx0;
+		const bx::simd128_t vtxLast = bx::simd128_ld(vertexList[lastVertexID << 1], vertexList[(lastVertexID << 1) + 1], 0.0f, 0.0f);
+		bx::simd128_t d01 = xmm_vec2_dir(vtxLast, vtx0);
+		bx::simd128_t p1  = vtx0;
 
 		const float* srcPos = vertexList + 2;
 		float* dstPos = &stroker->m_PosBuffer->x;
 
-		const __m128 xmm_epsilon = _mm_set_ps1(VG_EPSILON);
-		const __m128 vec2x2_perpCCW_xorMask = _mm_castsi128_ps(_mm_set_epi32(0, 0x80000000, 0, 0x80000000));
+		const bx::simd128_t xmm_epsilon = bx::simd128_splat(VG_EPSILON);
+		const bx::simd128_t vec2x2_perpCCW_xorMask = bx::simd128_ld(0x80000000u, 0u, 0x80000000u, 0u);
 
 		const uint32_t numIter = lastVertexID >> 2;
 		for (uint32_t i = 0; i < numIter; ++i) {
 			// Load 4 points. With p1 from previous loop iteration make up 4 segments
-			const __m128 p23 = _mm_loadu_ps(srcPos);                          // { p2.x, p2.y, p3.x, p3.y }
-			const __m128 p45 = _mm_loadu_ps(srcPos + 4);                      // { p4.x, p4.y, p5.x, p5.y }
+			const bx::simd128_t p23 = bx::simd128_ldu(srcPos);                          // { p2.x, p2.y, p3.x, p3.y }
+			const bx::simd128_t p45 = bx::simd128_ldu(srcPos + 4);                      // { p4.x, p4.y, p5.x, p5.y }
 
-			const __m128 p12 = _mm_movelh_ps(p1, p23);                        // { p1.x, p1.y, p2.x, p2.y }
-			const __m128 p34 = _mm_movelh_ps(_mm_movehl_ps(p23, p23), p45);   // { p3.x, p3.y, p4.x, p4.y }
+			const bx::simd128_t p12     = bx::simd128_x32_shuf_xyAB(p1, p23);           // { p1.x, p1.y, p2.x, p2.y }
+			const bx::simd128_t p23_hi  = bx::simd128_x32_shuf_CDzw(p23, p23);          // { p23.z, p23.w, p23.z, p23.w } -> use lo as p3
+			const bx::simd128_t p34     = bx::simd128_x32_shuf_xyAB(p23_hi, p45);       // { p3.x, p3.y, p4.x, p4.y }
 
 			// Calculate the direction vector of the 4 segments
-			// NOTE: Tried to calc all 4 rsqrt in 1 call but it ends up being slower. Kept this version for now.
-			const __m128 d12_23_unorm = _mm_sub_ps(p23, p12);
-			const __m128 d34_45_unorm = _mm_sub_ps(p45, p34);
+			const bx::simd128_t d12_23_unorm = bx::simd128_f32_sub(p23, p12);
+			const bx::simd128_t d34_45_unorm = bx::simd128_f32_sub(p45, p34);
 
-			const __m128 d12_23_xy_sqr = _mm_mul_ps(d12_23_unorm, d12_23_unorm);
-			const __m128 d34_45_xy_sqr = _mm_mul_ps(d34_45_unorm, d34_45_unorm);
+			const bx::simd128_t d12_23_xy_sqr = bx::simd128_f32_mul(d12_23_unorm, d12_23_unorm);
+			const bx::simd128_t d34_45_xy_sqr = bx::simd128_f32_mul(d34_45_unorm, d34_45_unorm);
 
-			const __m128 d12_23_yx_sqr = _mm_shuffle_ps(d12_23_xy_sqr, d12_23_xy_sqr, _MM_SHUFFLE(2, 3, 0, 1));
-			const __m128 d34_45_yx_sqr = _mm_shuffle_ps(d34_45_xy_sqr, d34_45_xy_sqr, _MM_SHUFFLE(2, 3, 0, 1));
+			const bx::simd128_t d12_23_yx_sqr = bx::simd128_x32_swiz_yxwz(d12_23_xy_sqr);
+			const bx::simd128_t d34_45_yx_sqr = bx::simd128_x32_swiz_yxwz(d34_45_xy_sqr);
 
-			const __m128 len12_23_sqr = _mm_add_ps(d12_23_xy_sqr, d12_23_yx_sqr);
-			const __m128 len34_45_sqr = _mm_add_ps(d34_45_xy_sqr, d34_45_yx_sqr);
+			const bx::simd128_t len12_23_sqr = bx::simd128_f32_add(d12_23_xy_sqr, d12_23_yx_sqr);
+			const bx::simd128_t len34_45_sqr = bx::simd128_f32_add(d34_45_xy_sqr, d34_45_yx_sqr);
 
-			const __m128 lenSqr123_ge_eps = _mm_cmpge_ps(len12_23_sqr, xmm_epsilon);
-			const __m128 lenSqr345_ge_eps = _mm_cmpge_ps(len34_45_sqr, xmm_epsilon);
+			const bx::simd128_t lenSqr123_ge_eps = bx::simd128_f32_cmpge(len12_23_sqr, xmm_epsilon);
+			const bx::simd128_t lenSqr345_ge_eps = bx::simd128_f32_cmpge(len34_45_sqr, xmm_epsilon);
 
-			const __m128 invLen12_23 = xmm_rsqrt(len12_23_sqr);
-			const __m128 invLen34_45 = xmm_rsqrt(len34_45_sqr);
+			const bx::simd128_t invLen12_23 = xmm_rsqrt(len12_23_sqr);
+			const bx::simd128_t invLen34_45 = xmm_rsqrt(len34_45_sqr);
 
-			const __m128 invLen12_23_masked = _mm_and_ps(invLen12_23, lenSqr123_ge_eps);
-			const __m128 invLen34_45_masked = _mm_and_ps(invLen34_45, lenSqr345_ge_eps);
+			const bx::simd128_t invLen12_23_masked = bx::simd128_and(invLen12_23, lenSqr123_ge_eps);
+			const bx::simd128_t invLen34_45_masked = bx::simd128_and(invLen34_45, lenSqr345_ge_eps);
 
-			const __m128 d12_23 = _mm_mul_ps(d12_23_unorm, invLen12_23_masked);
-			const __m128 d34_45 = _mm_mul_ps(d34_45_unorm, invLen34_45_masked);
+			const bx::simd128_t d12_23 = bx::simd128_f32_mul(d12_23_unorm, invLen12_23_masked);
+			const bx::simd128_t d34_45 = bx::simd128_f32_mul(d34_45_unorm, invLen34_45_masked);
 
 			// Calculate the 4 extrusion vectors for the 4 points based on the equ
 			// abs(cross(d12, d01) > epsilon ? ((d01 - d12) / cross(d12, d01)) : rot90CCW(d01)
-			const __m128 v012_123_fake = _mm_xor_ps(_mm_shuffle_ps(d01, d12_23, _MM_SHUFFLE(0, 1, 0, 1)), vec2x2_perpCCW_xorMask);
-			const __m128 v234_345_fake = _mm_xor_ps(_mm_shuffle_ps(d12_23, d34_45, _MM_SHUFFLE(0, 1, 2, 3)), vec2x2_perpCCW_xorMask);
+			// _mm_shuffle_ps(d01, d12_23, _MM_SHUFFLE(0, 1, 0, 1)) = (d01.y, d01.x, d12_23.y, d12_23.x)
+			const bx::simd128_t d01_yxzw     = bx::simd128_x32_swiz_yxzw(d01);
+			const bx::simd128_t d12_23_yxzw  = bx::simd128_x32_swiz_yxzw(d12_23);
+			const bx::simd128_t shuf012_123  = bx::simd128_x32_shuf_xyAB(d01_yxzw, d12_23_yxzw);
+			const bx::simd128_t v012_123_fake = bx::simd128_xor(shuf012_123, vec2x2_perpCCW_xorMask);
+
+			// _mm_shuffle_ps(d12_23, d34_45, _MM_SHUFFLE(0, 1, 2, 3)) = (d12_23.w, d12_23.z, d34_45.y, d34_45.x)
+			const bx::simd128_t d12_23_wzzw  = bx::simd128_x32_swiz_wzzw(d12_23);
+			const bx::simd128_t d34_45_yxzw  = bx::simd128_x32_swiz_yxzw(d34_45);
+			const bx::simd128_t shuf234_345  = bx::simd128_x32_shuf_xyAB(d12_23_wzzw, d34_45_yxzw);
+			const bx::simd128_t v234_345_fake = bx::simd128_xor(shuf234_345, vec2x2_perpCCW_xorMask);
 
 			// cross012 = d12.x * d01.y - d12.y * d01.x
 			// cross123 = d23.x * d12.y - d23.y * d12.x
 			// cross234 = d34.x * d23.y - d34.y * d23.x
 			// cross345 = d45.x * d34.y - d45.y * d34.x
-			const __m128 dxy01_12 = _mm_shuffle_ps(d01, d12_23, _MM_SHUFFLE(1, 0, 1, 0));
-			const __m128 dxy12_23 = d12_23;
-			const __m128 dxy23_34 = _mm_shuffle_ps(d12_23, d34_45, _MM_SHUFFLE(1, 0, 3, 2));
-			const __m128 dxy34_45 = d34_45;
+			// _mm_shuffle_ps(d01, d12_23, _MM_SHUFFLE(1, 0, 1, 0)) = (d01.x, d01.y, d12_23.x, d12_23.y)
+			const bx::simd128_t dxy01_12 = bx::simd128_x32_shuf_xyAB(d01, d12_23);
+			const bx::simd128_t dxy12_23 = d12_23;
+			// _mm_shuffle_ps(d12_23, d34_45, _MM_SHUFFLE(1, 0, 3, 2)) = (d12_23.z, d12_23.w, d34_45.x, d34_45.y)
+			const bx::simd128_t d12_23_zwxy = bx::simd128_x32_swiz_zwxy(d12_23);
+			const bx::simd128_t dxy23_34    = bx::simd128_x32_shuf_xyAB(d12_23_zwxy, d34_45);
+			const bx::simd128_t dxy34_45    = d34_45;
 
-			const __m128 dx01_12_23_34 = _mm_shuffle_ps(dxy01_12, dxy23_34, _MM_SHUFFLE(2, 0, 2, 0));
-			const __m128 dy01_12_23_34 = _mm_shuffle_ps(dxy01_12, dxy23_34, _MM_SHUFFLE(3, 1, 3, 1));
-			const __m128 dx12_23_34_45 = _mm_shuffle_ps(dxy12_23, dxy34_45, _MM_SHUFFLE(2, 0, 2, 0));
-			const __m128 dy12_23_34_45 = _mm_shuffle_ps(dxy12_23, dxy34_45, _MM_SHUFFLE(3, 1, 3, 1));
+			const bx::simd128_t dx01_12_23_34 = bx::simd128_x32_shuf_xzAC(dxy01_12, dxy23_34);
+			const bx::simd128_t dy01_12_23_34 = bx::simd128_x32_shuf_ywBD(dxy01_12, dxy23_34);
+			const bx::simd128_t dx12_23_34_45 = bx::simd128_x32_shuf_xzAC(dxy12_23, dxy34_45);
+			const bx::simd128_t dy12_23_34_45 = bx::simd128_x32_shuf_ywBD(dxy12_23, dxy34_45);
 
-			const __m128 crossx012_123_234_345 = _mm_mul_ps(dx12_23_34_45, dy01_12_23_34);
-			const __m128 crossy012_123_234_345 = _mm_mul_ps(dy12_23_34_45, dx01_12_23_34);
+			const bx::simd128_t crossx012_123_234_345 = bx::simd128_f32_mul(dx12_23_34_45, dy01_12_23_34);
+			const bx::simd128_t crossy012_123_234_345 = bx::simd128_f32_mul(dy12_23_34_45, dx01_12_23_34);
 
-			const __m128 cross012_123_234_345 = _mm_sub_ps(crossx012_123_234_345, crossy012_123_234_345);
+			const bx::simd128_t cross012_123_234_345 = bx::simd128_f32_sub(crossx012_123_234_345, crossy012_123_234_345);
 
-			const __m128 inv_cross012_123_234_345 = xmm_rcp(cross012_123_234_345);
+			const bx::simd128_t inv_cross012_123_234_345 = xmm_rcp(cross012_123_234_345);
 
-			const __m128 cross_gt_eps012_123_234_345 = _mm_cmpge_ps(cross012_123_234_345, xmm_epsilon);
+			const bx::simd128_t cross_gt_eps012_123_234_345 = bx::simd128_f32_cmpge(cross012_123_234_345, xmm_epsilon);
 
-			const __m128 inv_cross012_123 = _mm_shuffle_ps(inv_cross012_123_234_345, inv_cross012_123_234_345, _MM_SHUFFLE(1, 1, 0, 0));
-			const __m128 inv_cross234_345 = _mm_shuffle_ps(inv_cross012_123_234_345, inv_cross012_123_234_345, _MM_SHUFFLE(3, 3, 2, 2));
+			const bx::simd128_t inv_cross012_123 = bx::simd128_x32_swiz_xxyy(inv_cross012_123_234_345);
+			const bx::simd128_t inv_cross234_345 = bx::simd128_x32_swiz_zzww(inv_cross012_123_234_345);
 
-			const __m128 cross012_123_gt_eps = _mm_shuffle_ps(cross_gt_eps012_123_234_345, cross_gt_eps012_123_234_345, _MM_SHUFFLE(1, 1, 0, 0));
-			const __m128 cross234_345_gt_eps = _mm_shuffle_ps(cross_gt_eps012_123_234_345, cross_gt_eps012_123_234_345, _MM_SHUFFLE(3, 3, 2, 2));
+			const bx::simd128_t cross012_123_gt_eps = bx::simd128_x32_swiz_xxyy(cross_gt_eps012_123_234_345);
+			const bx::simd128_t cross234_345_gt_eps = bx::simd128_x32_swiz_zzww(cross_gt_eps012_123_234_345);
 
-			const __m128 dxy012_123 = _mm_sub_ps(dxy01_12, dxy12_23);
-			const __m128 dxy234_345 = _mm_sub_ps(dxy23_34, dxy34_45);
+			const bx::simd128_t dxy012_123 = bx::simd128_f32_sub(dxy01_12, dxy12_23);
+			const bx::simd128_t dxy234_345 = bx::simd128_f32_sub(dxy23_34, dxy34_45);
 
-			const __m128 v012_123_true = _mm_mul_ps(dxy012_123, inv_cross012_123);
-			const __m128 v234_345_true = _mm_mul_ps(dxy234_345, inv_cross234_345);
+			const bx::simd128_t v012_123_true = bx::simd128_f32_mul(dxy012_123, inv_cross012_123);
+			const bx::simd128_t v234_345_true = bx::simd128_f32_mul(dxy234_345, inv_cross234_345);
 
-			const __m128 v012_123_true_masked = _mm_and_ps(cross012_123_gt_eps, v012_123_true);
-			const __m128 v234_345_true_masked = _mm_and_ps(cross234_345_gt_eps, v234_345_true);
+			const bx::simd128_t v012_123_true_masked = bx::simd128_and(cross012_123_gt_eps, v012_123_true);
+			const bx::simd128_t v234_345_true_masked = bx::simd128_and(cross234_345_gt_eps, v234_345_true);
 
-			const __m128 v012_123_fake_masked = _mm_andnot_ps(cross012_123_gt_eps, v012_123_fake);
-			const __m128 v245_345_fake_masked = _mm_andnot_ps(cross234_345_gt_eps, v234_345_fake);
+			// _mm_andnot_ps(a, b) = ~a & b ; bx::simd128_andc(b, a) = b & ~a
+			const bx::simd128_t v012_123_fake_masked = bx::simd128_andc(v012_123_fake, cross012_123_gt_eps);
+			const bx::simd128_t v245_345_fake_masked = bx::simd128_andc(v234_345_fake, cross234_345_gt_eps);
 
-			const __m128 v012_123 = _mm_or_ps(v012_123_true_masked, v012_123_fake_masked);
-			const __m128 v234_345 = _mm_or_ps(v234_345_true_masked, v245_345_fake_masked);
+			const bx::simd128_t v012_123 = bx::simd128_or(v012_123_true_masked, v012_123_fake_masked);
+			const bx::simd128_t v234_345 = bx::simd128_or(v234_345_true_masked, v245_345_fake_masked);
 
-			const __m128 v012_v123_aa = _mm_mul_ps(v012_123, xmm_aa);
-			const __m128 v234_v345_aa = _mm_mul_ps(v234_345, xmm_aa);
+			const bx::simd128_t v012_v123_aa = bx::simd128_f32_mul(v012_123, xmm_aa);
+			const bx::simd128_t v234_v345_aa = bx::simd128_f32_mul(v234_345, xmm_aa);
 
 			// Calculate the 2 fringe points for each of p1, p2, p3 and p4
-			const __m128 posEdge12 = _mm_add_ps(p12, v012_v123_aa);
-			const __m128 negEdge12 = _mm_sub_ps(p12, v012_v123_aa);
-			const __m128 posEdge34 = _mm_add_ps(p34, v234_v345_aa);
-			const __m128 negEdge34 = _mm_sub_ps(p34, v234_v345_aa);
+			const bx::simd128_t posEdge12 = bx::simd128_f32_add(p12, v012_v123_aa);
+			const bx::simd128_t negEdge12 = bx::simd128_f32_sub(p12, v012_v123_aa);
+			const bx::simd128_t posEdge34 = bx::simd128_f32_add(p34, v234_v345_aa);
+			const bx::simd128_t negEdge34 = bx::simd128_f32_sub(p34, v234_v345_aa);
 
-			const __m128 p1_in_out = _mm_shuffle_ps(posEdge12, negEdge12, _MM_SHUFFLE(1, 0, 1, 0));
-			const __m128 p2_in_out = _mm_shuffle_ps(posEdge12, negEdge12, _MM_SHUFFLE(3, 2, 3, 2));
-			const __m128 p3_in_out = _mm_shuffle_ps(posEdge34, negEdge34, _MM_SHUFFLE(1, 0, 1, 0));
-			const __m128 p4_in_out = _mm_shuffle_ps(posEdge34, negEdge34, _MM_SHUFFLE(3, 2, 3, 2));
+			const bx::simd128_t p1_in_out = bx::simd128_x32_shuf_xyAB(posEdge12, negEdge12);
+			const bx::simd128_t p2_in_out = bx::simd128_x32_shuf_zwCD(posEdge12, negEdge12);
+			const bx::simd128_t p3_in_out = bx::simd128_x32_shuf_xyAB(posEdge34, negEdge34);
+			const bx::simd128_t p4_in_out = bx::simd128_x32_shuf_zwCD(posEdge34, negEdge34);
 
 			// Store the fringe points
-			_mm_store_ps(dstPos + 0, p1_in_out);
-			_mm_store_ps(dstPos + 4, p2_in_out);
-			_mm_store_ps(dstPos + 8, p3_in_out);
-			_mm_store_ps(dstPos + 12, p4_in_out);
+			bx::simd128_st(dstPos + 0,  p1_in_out);
+			bx::simd128_st(dstPos + 4,  p2_in_out);
+			bx::simd128_st(dstPos + 8,  p3_in_out);
+			bx::simd128_st(dstPos + 12, p4_in_out);
 
 			// Move on to the next iteration.
-			d01 = _mm_movehl_ps(d34_45, d34_45);
-			p1 = _mm_movehl_ps(p45, p45); // p1 = p5
+			d01 = bx::simd128_x32_shuf_CDzw(d34_45, d34_45);
+			p1  = bx::simd128_x32_shuf_CDzw(p45, p45); // p1 = p5
 			srcPos += 8;
 			dstPos += 16;
 		}
 
 		uint32_t rem = (lastVertexID & 3);
 		if (rem >= 2) {
-			const __m128 p23 = _mm_loadu_ps(srcPos);
-			const __m128 p12 = _mm_movelh_ps(p1, p23);
+			const bx::simd128_t p23 = bx::simd128_ldu(srcPos);
+			const bx::simd128_t p12 = bx::simd128_x32_shuf_xyAB(p1, p23);
 
-			const __m128 d12_23 = _mm_sub_ps(p23, p12);
-			const __m128 d12_23_xy_sqr = _mm_mul_ps(d12_23, d12_23);
-			const __m128 d12_23_yx_sqr = _mm_shuffle_ps(d12_23_xy_sqr, d12_23_xy_sqr, _MM_SHUFFLE(2, 3, 0, 1));
-			const __m128 len12_23_sqr = _mm_add_ps(d12_23_xy_sqr, d12_23_yx_sqr);
-			const __m128 lenSqr_ge_eps = _mm_cmpge_ps(len12_23_sqr, xmm_epsilon);
+			const bx::simd128_t d12_23        = bx::simd128_f32_sub(p23, p12);
+			const bx::simd128_t d12_23_xy_sqr = bx::simd128_f32_mul(d12_23, d12_23);
+			const bx::simd128_t d12_23_yx_sqr = bx::simd128_x32_swiz_yxwz(d12_23_xy_sqr);
+			const bx::simd128_t len12_23_sqr  = bx::simd128_f32_add(d12_23_xy_sqr, d12_23_yx_sqr);
+			const bx::simd128_t lenSqr_ge_eps = bx::simd128_f32_cmpge(len12_23_sqr, xmm_epsilon);
 
-			const __m128 invLen12_23 = xmm_rsqrt(len12_23_sqr);
+			const bx::simd128_t invLen12_23        = xmm_rsqrt(len12_23_sqr);
+			const bx::simd128_t invLen12_23_masked = bx::simd128_and(invLen12_23, lenSqr_ge_eps);
+			const bx::simd128_t d12_23_norm        = bx::simd128_f32_mul(d12_23, invLen12_23_masked);
 
-			const __m128 invLen12_23_masked = _mm_and_ps(invLen12_23, lenSqr_ge_eps);
-			const __m128 d12_23_norm = _mm_mul_ps(d12_23, invLen12_23_masked);
+			const bx::simd128_t d12 = bx::simd128_x32_shuf_xyAB(d12_23_norm, d12_23_norm);
+			const bx::simd128_t d23 = bx::simd128_x32_shuf_CDzw(d12_23_norm, d12_23_norm);
 
-			const __m128 d12 = _mm_movelh_ps(d12_23_norm, d12_23_norm);
-			const __m128 d23 = _mm_movehl_ps(d12_23_norm, d12_23_norm);
+			const bx::simd128_t d12xy_d01xy = bx::simd128_x32_shuf_xyAB(d12, d01);
+			const bx::simd128_t d23xy_d12xy = bx::simd128_x32_shuf_xyAB(d23, d12);
 
-			const __m128 d12xy_d01xy = _mm_movelh_ps(d12, d01);
-			const __m128 d23xy_d12xy = _mm_movelh_ps(d23, d12);
+			const bx::simd128_t d01yx_d12yx = bx::simd128_x32_swiz_wzyx(d12xy_d01xy);
+			const bx::simd128_t d12yx_d23yx = bx::simd128_x32_swiz_wzyx(d23xy_d12xy);
 
-			const __m128 d01yx_d12yx = _mm_shuffle_ps(d12xy_d01xy, d12xy_d01xy, _MM_SHUFFLE(0, 1, 2, 3));
-			const __m128 d12yx_d23yx = _mm_shuffle_ps(d23xy_d12xy, d23xy_d12xy, _MM_SHUFFLE(0, 1, 2, 3));
+			const bx::simd128_t d12xd01y_d12yd01x = bx::simd128_f32_mul(d12xy_d01xy, d01yx_d12yx);
+			const bx::simd128_t d23xd12y_d23yd12x = bx::simd128_f32_mul(d23xy_d12xy, d12yx_d23yx);
 
-			const __m128 d12xd01y_d12yd01x = _mm_mul_ps(d12xy_d01xy, d01yx_d12yx);
-			const __m128 d23xd12y_d23yd12x = _mm_mul_ps(d23xy_d12xy, d12yx_d23yx);
+			const bx::simd128_t d12yd01x_d23yd12x = bx::simd128_x32_shuf_yyBB(d12xd01y_d12yd01x, d23xd12y_d23yd12x);
+			const bx::simd128_t d12xd01y_d23xd12x = bx::simd128_x32_shuf_xxAA(d12xd01y_d12yd01x, d23xd12y_d23yd12x);
 
-			const __m128 d12yd01x_d23yd12x = _mm_shuffle_ps(d12xd01y_d12yd01x, d23xd12y_d23yd12x, _MM_SHUFFLE(1, 1, 1, 1));
-			const __m128 d12xd01y_d23xd12x = _mm_shuffle_ps(d12xd01y_d12yd01x, d23xd12y_d23yd12x, _MM_SHUFFLE(0, 0, 0, 0));
+			const bx::simd128_t cross012_123 = bx::simd128_f32_sub(d12xd01y_d23xd12x, d12yd01x_d23yd12x);
 
-			const __m128 cross012_123 = _mm_sub_ps(d12xd01y_d23xd12x, d12yd01x_d23yd12x);
+			const bx::simd128_t inv_cross012_123 = xmm_rcp(cross012_123);
 
-			const __m128 inv_cross012_123 = xmm_rcp(cross012_123);
+			const bx::simd128_t v012_123_fake = bx::simd128_xor(d01yx_d12yx, vec2x2_perpCCW_xorMask);
 
-			const __m128 v012_123_fake = _mm_xor_ps(d01yx_d12yx, vec2x2_perpCCW_xorMask);
+			const bx::simd128_t d01xy_d12xy = bx::simd128_x32_swiz_zwxy(d12xy_d01xy);
+			const bx::simd128_t d12xy_d23xy = bx::simd128_x32_swiz_zwxy(d23xy_d12xy);
 
-			const __m128 d01xy_d12xy = _mm_shuffle_ps(d12xy_d01xy, d12xy_d01xy, _MM_SHUFFLE(1, 0, 3, 2));
-			const __m128 d12xy_d23xy = _mm_shuffle_ps(d23xy_d12xy, d23xy_d12xy, _MM_SHUFFLE(1, 0, 3, 2));
+			const bx::simd128_t d012xy_d123xy = bx::simd128_f32_sub(d01xy_d12xy, d12xy_d23xy);
+			const bx::simd128_t v012_123_true = bx::simd128_f32_mul(d012xy_d123xy, inv_cross012_123);
 
-			const __m128 d012xy_d123xy = _mm_sub_ps(d01xy_d12xy, d12xy_d23xy);
-			const __m128 v012_123_true = _mm_mul_ps(d012xy_d123xy, inv_cross012_123);
+			const bx::simd128_t cross_gt_eps           = bx::simd128_f32_cmpge(cross012_123, xmm_epsilon);
+			const bx::simd128_t v012_123_true_masked   = bx::simd128_and(cross_gt_eps, v012_123_true);
+			const bx::simd128_t v012_123_fake_masked   = bx::simd128_andc(v012_123_fake, cross_gt_eps);
+			const bx::simd128_t v012_123               = bx::simd128_or(v012_123_true_masked, v012_123_fake_masked);
 
-			const __m128 cross_gt_eps = _mm_cmpge_ps(cross012_123, xmm_epsilon);
-			const __m128 v012_123_true_masked = _mm_and_ps(cross_gt_eps, v012_123_true);
-			const __m128 v012_123_fake_masked = _mm_andnot_ps(cross_gt_eps, v012_123_fake);
-			const __m128 v012_123 = _mm_or_ps(v012_123_true_masked, v012_123_fake_masked);
+			const bx::simd128_t v012_v123_aa = bx::simd128_f32_mul(v012_123, xmm_aa);
 
-			const __m128 v012_v123_aa = _mm_mul_ps(v012_123, xmm_aa);
+			const bx::simd128_t posEdge = bx::simd128_f32_add(p12, v012_v123_aa);
+			const bx::simd128_t negEdge = bx::simd128_f32_sub(p12, v012_v123_aa);
 
-			const __m128 posEdge = _mm_add_ps(p12, v012_v123_aa);
-			const __m128 negEdge = _mm_sub_ps(p12, v012_v123_aa);
+			const bx::simd128_t packed0 = bx::simd128_x32_shuf_xyAB(posEdge, negEdge);
+			const bx::simd128_t packed1 = bx::simd128_x32_shuf_zwCD(posEdge, negEdge);
 
-			const __m128 packed0 = _mm_shuffle_ps(posEdge, negEdge, _MM_SHUFFLE(1, 0, 1, 0));
-			const __m128 packed1 = _mm_shuffle_ps(posEdge, negEdge, _MM_SHUFFLE(3, 2, 3, 2));
-
-			_mm_store_ps(dstPos, packed0);
-			_mm_store_ps(dstPos + 4, packed1);
+			bx::simd128_st(dstPos,     packed0);
+			bx::simd128_st(dstPos + 4, packed1);
 
 			dstPos += 8;
 			srcPos += 4;
 			d01 = d23;
-			p1 = _mm_movehl_ps(p23, p23);
+			p1  = bx::simd128_x32_shuf_CDzw(p23, p23);
 
 			rem -= 2;
 		}
 
 		if (rem) {
-			const __m128 p2 = _mm_loadl_pi(_mm_setzero_ps(), (const __m64*)srcPos);
-			const __m128 d12 = xmm_vec2_dir(p1, p2);
-			const __m128 v_aa = _mm_mul_ps(xmm_calcExtrusionVector(d01, d12), xmm_aa);
-			const __m128 packed = _mm_movelh_ps(_mm_add_ps(p1, v_aa), _mm_sub_ps(p1, v_aa));
-			_mm_store_ps(dstPos, packed);
+			const bx::simd128_t p2     = bx::simd128_ld(srcPos[0], srcPos[1], 0.0f, 0.0f);
+			const bx::simd128_t d12    = xmm_vec2_dir(p1, p2);
+			const bx::simd128_t extr   = xmm_calcExtrusionVector(d01, d12);
+			const bx::simd128_t v_aa   = bx::simd128_f32_mul(extr, xmm_aa);
+			const bx::simd128_t posEdge = bx::simd128_f32_add(p1, v_aa);
+			const bx::simd128_t negEdge = bx::simd128_f32_sub(p1, v_aa);
+			const bx::simd128_t packed = bx::simd128_x32_shuf_xyAB(posEdge, negEdge);
+			bx::simd128_st(dstPos, packed);
 
 			dstPos += 4;
 			srcPos += 2;
 			d01 = d12;
-			p1 = p2;
+			p1  = p2;
 		}
 
 		// Last segment
 		{
-			const __m128 v_aa = _mm_mul_ps(xmm_calcExtrusionVector(d01, xmm_vec2_dir(p1, vtx0)), xmm_aa);
-			const __m128 packed = _mm_movelh_ps(_mm_add_ps(p1, v_aa), _mm_sub_ps(p1, v_aa));
-			_mm_store_ps(dstPos, packed);
+			const bx::simd128_t dirEnd = xmm_vec2_dir(p1, vtx0);
+			const bx::simd128_t extr   = xmm_calcExtrusionVector(d01, dirEnd);
+			const bx::simd128_t v_aa   = bx::simd128_f32_mul(extr, xmm_aa);
+			const bx::simd128_t posEdge = bx::simd128_f32_add(p1, v_aa);
+			const bx::simd128_t negEdge = bx::simd128_f32_sub(p1, v_aa);
+			const bx::simd128_t packed = bx::simd128_x32_shuf_xyAB(posEdge, negEdge);
+			bx::simd128_st(dstPos, packed);
 		}
 
 		const uint32_t colors[2] = { color, c0 };
@@ -613,72 +634,73 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 
 		const uint32_t numFanTris = numVertices - 2;
 
-		__m128i xmm_stv = _mm_set1_epi16(2);
+		bx::simd128_t xmm_stv = bx::simd128_splat((int16_t)2);
 		{
 			static const uint16_t delta0[8] = { 0, 0, 2, 0, 1, 3, 0, 3 };
 			static const uint16_t delta1[8] = { 2, 0, 2, 4, 2, 3, 5, 2 };
 			static const uint16_t delta2[8] = { 5, 4, 0, 4, 6, 4, 5, 7 };
 			static const uint16_t delta3[8] = { 4, 7, 6, 0, 6, 8, 6, 7 };
 			static const uint16_t delta4[8] = { 9, 6, 9, 8, 0, 0, 0, 0 };
-			const __m128i xmm_delta0 = _mm_loadu_si128((const __m128i*)delta0);
-			const __m128i xmm_delta1 = _mm_loadu_si128((const __m128i*)delta1);
-			const __m128i xmm_delta2 = _mm_loadu_si128((const __m128i*)delta2);
-			const __m128i xmm_delta3 = _mm_loadu_si128((const __m128i*)delta3);
-			const __m128i xmm_delta4 = _mm_loadu_si128((const __m128i*)delta4);
+			const bx::simd128_t xmm_delta0 = bx::simd128_ldu(delta0);
+			const bx::simd128_t xmm_delta1 = bx::simd128_ldu(delta1);
+			const bx::simd128_t xmm_delta2 = bx::simd128_ldu(delta2);
+			const bx::simd128_t xmm_delta3 = bx::simd128_ldu(delta3);
+			const bx::simd128_t xmm_delta4 = bx::simd128_ldu(delta4);
 
-			const __m128i xmm_stv_delta = _mm_set1_epi16(8);
+			const bx::simd128_t xmm_stv_delta = bx::simd128_splat((int16_t)8);
 
 			const uint32_t numIter = numFanTris >> 2;
 			for (uint32_t i = 0; i < numIter; ++i) {
-				// { 0, stv + 0, stv + 2, stv + 0, stv + 1, stv + 3, stv + 0, stv + 3 }
-				// { stv + 2, 0, stv + 2, stv + 4, stv + 2, stv + 3, stv + 5, stv + 2 }
-				// { stv + 5, stv + 4, 0, stv + 4, stv + 6, stv + 4, stv + 5, stv + 7 }
-				// { stv + 4, stv + 7, stv + 6, 0, stv + 6, stv + 8, stv + 6, stv + 7 }
-				// { stv + 9, stv + 6, stv + 9, stv + 8 }
-				const __m128i xmm_id0 = _mm_add_epi16(xmm_stv, xmm_delta0);
-				const __m128i xmm_id1 = _mm_add_epi16(xmm_stv, xmm_delta1);
-				const __m128i xmm_id2 = _mm_add_epi16(xmm_stv, xmm_delta2);
-				const __m128i xmm_id3 = _mm_add_epi16(xmm_stv, xmm_delta3);
-				const __m128i xmm_id4 = _mm_add_epi16(xmm_stv, xmm_delta4);
+				const bx::simd128_t xmm_id0 = bx::simd128_i16_add(xmm_stv, xmm_delta0);
+				const bx::simd128_t xmm_id1 = bx::simd128_i16_add(xmm_stv, xmm_delta1);
+				const bx::simd128_t xmm_id2 = bx::simd128_i16_add(xmm_stv, xmm_delta2);
+				const bx::simd128_t xmm_id3 = bx::simd128_i16_add(xmm_stv, xmm_delta3);
+				const bx::simd128_t xmm_id4 = bx::simd128_i16_add(xmm_stv, xmm_delta4);
 
-				_mm_storeu_si128((__m128i*)(dstIndex + 0), _mm_insert_epi16(xmm_id0, 0, 0));
-				_mm_storeu_si128((__m128i*)(dstIndex + 8), _mm_insert_epi16(xmm_id1, 0, 1));
-				_mm_storeu_si128((__m128i*)(dstIndex + 16), _mm_insert_epi16(xmm_id2, 0, 2));
-				_mm_storeu_si128((__m128i*)(dstIndex + 24), _mm_insert_epi16(xmm_id3, 0, 3));
-				_mm_storel_epi64((__m128i*)(dstIndex + 32), xmm_id4);
+				bx::simd128_stu(dstIndex + 0,  xmm_id0);
+				dstIndex[0] = 0; // overwrite lane 0 (was _mm_insert_epi16(xmm_id0, 0, 0))
+				bx::simd128_stu(dstIndex + 8,  xmm_id1);
+				dstIndex[8 + 1] = 0;
+				bx::simd128_stu(dstIndex + 16, xmm_id2);
+				dstIndex[16 + 2] = 0;
+				bx::simd128_stu(dstIndex + 24, xmm_id3);
+				dstIndex[24 + 3] = 0;
+				// _mm_storel_epi64 stores low 8 bytes (4 uint16) of xmm_id4
+				bx::memCopy(dstIndex + 32, &xmm_id4, sizeof(uint16_t) * 4);
 
 				dstIndex += 36;
-				xmm_stv = _mm_add_epi16(xmm_stv, xmm_stv_delta);
+				xmm_stv = bx::simd128_i16_add(xmm_stv, xmm_stv_delta);
 			}
 		}
 
 		{
 			static const uint16_t delta0[8] = { 0, 2, 0, 1, 3, 0, 3, 2 };
 			static const uint16_t delta1[8] = { 2, 4, 2, 3, 5, 2, 5, 4 };
-			const __m128i xmm_delta0 = _mm_loadu_si128((const __m128i*)delta0);
+			const bx::simd128_t xmm_delta0 = bx::simd128_ldu(delta0);
 
 			uint32_t rem = numFanTris & 3;
 			if (rem >= 2) {
-				const __m128i xmm_delta1 = _mm_loadu_si128((const __m128i*)delta1);
-				const __m128i xmm_id0 = _mm_add_epi16(xmm_stv, xmm_delta0);
-				const __m128i xmm_id1 = _mm_add_epi16(xmm_stv, xmm_delta1);
+				const bx::simd128_t xmm_delta1 = bx::simd128_ldu(delta1);
+				const bx::simd128_t xmm_id0    = bx::simd128_i16_add(xmm_stv, xmm_delta0);
+				const bx::simd128_t xmm_id1    = bx::simd128_i16_add(xmm_stv, xmm_delta1);
 
 				dstIndex[0] = 0;
-				_mm_storeu_si128((__m128i*)(dstIndex + 1), xmm_id0);
+				bx::simd128_stu(dstIndex + 1, xmm_id0);
 
 				dstIndex[9] = 0;
-				_mm_storeu_si128((__m128i*)(dstIndex + 10), xmm_id1);
+				bx::simd128_stu(dstIndex + 10, xmm_id1);
 
 				dstIndex += 18;
-				xmm_stv = _mm_add_epi16(xmm_stv, _mm_set1_epi16(4));
+				const bx::simd128_t xmm_four = bx::simd128_splat((int16_t)4);
+				xmm_stv = bx::simd128_i16_add(xmm_stv, xmm_four);
 				rem -= 2;
 			}
 
 			if (rem) {
-				const __m128i xmm_id0 = _mm_add_epi16(xmm_stv, xmm_delta0);
+				const bx::simd128_t xmm_id0 = bx::simd128_i16_add(xmm_stv, xmm_delta0);
 
 				dstIndex[0] = 0;
-				_mm_storeu_si128((__m128i*)(dstIndex + 1), xmm_id0);
+				bx::simd128_stu(dstIndex + 1, xmm_id0);
 
 				dstIndex += 9;
 			}
@@ -1004,7 +1026,7 @@ void polylineStroke(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numP
 	const uint32_t numSegments = numPathVertices - (_Closed ? 0 : 1);
 	const float hsw = strokeWidth * 0.5f;
 	const float da = bx::acos((stroker->m_Scale * hsw) / ((stroker->m_Scale * hsw) + stroker->m_TesselationTolerance)) * 2.0f;
-	const uint32_t numPointsHalfCircle = bx::uint32_max(2u, (uint32_t)bx::ceil(bx::kPi / da));
+	const uint32_t numPointsHalfCircle = bx::max(2u, (uint32_t)bx::ceil(bx::kPi / da));
 
 	resetGeometry(stroker);
 
@@ -1136,7 +1158,7 @@ void polylineStroke(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numP
 						a12 += bx::kPi2;
 					}
 
-					numArcPoints = bx::uint32_max(2u, (uint32_t)((a12 - a01) / da));
+					numArcPoints = bx::max(2u, (uint32_t)((a12 - a01) / da));
 					arcDa = ((a12 - a01) / (float)numArcPoints);
 				}
 
@@ -1234,7 +1256,7 @@ void polylineStroke(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numP
 						a12 -= bx::kPi2;
 					}
 
-					numArcPoints = bx::uint32_max(2u, (uint32_t)((a01 - a12) / da));
+					numArcPoints = bx::max(2u, (uint32_t)((a01 - a12) / da));
 					arcDa = ((a12 - a01) / (float)numArcPoints);
 				}
 
@@ -1389,7 +1411,7 @@ void polylineStrokeAA(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t nu
 	const float hsw = (strokeWidth - stroker->m_FringeWidth) * 0.5f;
 	const float hsw_aa = hsw + stroker->m_FringeWidth;
 	const float da = bx::acos((stroker->m_Scale * hsw) / ((stroker->m_Scale * hsw) + stroker->m_TesselationTolerance)) * 2.0f;
-	const uint32_t numPointsHalfCircle = bx::uint32_max(2u, (uint32_t)bx::ceil(bx::kPi / da));
+	const uint32_t numPointsHalfCircle = bx::max(2u, (uint32_t)bx::ceil(bx::kPi / da));
 
 	resetGeometry(stroker);
 
@@ -1584,7 +1606,7 @@ void polylineStrokeAA(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t nu
 						a12 += bx::kPi2;
 					}
 
-					numArcPoints = bx::uint32_max(2u, (uint32_t)((a12 - a01) / da));
+					numArcPoints = bx::max(2u, (uint32_t)((a12 - a01) / da));
 					arcDa = ((a12 - a01) / (float)numArcPoints);
 				}
 
@@ -1740,7 +1762,7 @@ void polylineStrokeAA(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t nu
 						a12 -= bx::kPi2;
 					}
 
-					numArcPoints = bx::uint32_max(2u, (uint32_t)((a01 - a12) / da));
+					numArcPoints = bx::max(2u, (uint32_t)((a01 - a12) / da));
 					arcDa = ((a12 - a01) / (float)numArcPoints);
 				}
 
