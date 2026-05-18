@@ -1675,7 +1675,7 @@ static void fsBackendFreeFont(FontSystem* fs, void* fontPtr)
 
 	bx::AllocatorI* allocator = fs->m_Allocator;
 
-	bx::free(allocator, font->kern_ascii);
+	bx::free(allocator, font->glyph_index_to_ascii);
 	if (font->kern_codemap) {
 		bx::free(allocator, font->kern_codemap);
 	}
