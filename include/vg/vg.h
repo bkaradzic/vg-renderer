@@ -53,7 +53,7 @@ typedef uint32_t Color;
 
 Color color4f(float r, float g, float b, float a);
 Color color4ub(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
-Color colorHSB(float h, float s, float b);
+Color colorHSB(float h, float s, float b, float alpha = 1.0f);
 Color colorSetAlpha(Color c, uint8_t a);
 uint8_t colorGetRed(Color c);
 uint8_t colorGetGreen(Color c);
