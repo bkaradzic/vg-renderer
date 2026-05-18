@@ -483,16 +483,16 @@ inline bool isLocal(ImagePatternHandle handle) { return isLocal(handle.flags); }
 Context* createContext(bx::AllocatorI* allocator, const ContextConfig* userCfg)
 {
 	static const ContextConfig defaultConfig = {
-		64,                          // m_MaxGradients
-		64,                          // m_MaxImagePatterns
-		8,                           // m_MaxFonts
-		32,                          // m_MaxStateStackSize
-		16,                          // m_MaxImages
-		256,                         // m_MaxCommandLists
-		65536,                       // m_MaxVBVertices
-		ImageFlags::Filter_Bilinear, // m_FontAtlasImageFlags
-		16,                          // m_MaxCommandListDepth
-		true                         // m_ResetViewTransformOnEnd
+		.m_MaxGradients            = 64,
+		.m_MaxImagePatterns        = 64,
+		.m_MaxFonts                = 8,
+		.m_MaxStateStackSize       = 32,
+		.m_MaxImages               = 16,
+		.m_MaxCommandLists         = 256,
+		.m_MaxVBVertices           = 65536,
+		.m_FontAtlasImageFlags     = ImageFlags::Filter_Bilinear,
+		.m_MaxCommandListDepth     = 16,
+		.m_ResetViewTransformOnEnd = true,
 	};
 
 	const ContextConfig* cfg = userCfg ? userCfg : &defaultConfig;
@@ -585,18 +585,20 @@ Context* createContext(bx::AllocatorI* allocator, const ContextConfig* userCfg)
 
 	// Initialize font system
 	const bgfx::Caps* caps = bgfx::getCaps();
-	FontSystemConfig fsCfg;
-	fsCfg.m_AtlasWidth = VG_CONFIG_MIN_FONT_ATLAS_SIZE;
-	fsCfg.m_AtlasHeight = VG_CONFIG_MIN_FONT_ATLAS_SIZE;
-	fsCfg.m_Flags = FontSystemFlags::Origin_TopLeft;
-	fsCfg.m_FontAtlasImageFlags = cfg->m_FontAtlasImageFlags;
-	// NOTE: White rect might get too large but since the atlas limit is the texture size limit
-	// it should be that large. Otherwise shapes cached when the atlas was 512x512 will get wrong
-	// white pixel UVs when the atlas gets to the texture size limit (should not happen but better
-	// be safe).
-	fsCfg.m_WhiteRectWidth = (uint16_t)(caps->limits.maxTextureSize / VG_CONFIG_MIN_FONT_ATLAS_SIZE);
-	fsCfg.m_WhiteRectHeight = (uint16_t)(caps->limits.maxTextureSize / VG_CONFIG_MIN_FONT_ATLAS_SIZE);
-	fsCfg.m_MaxTextureSize = caps->limits.maxTextureSize;
+	FontSystemConfig fsCfg
+	{
+		.m_AtlasWidth = VG_CONFIG_MIN_FONT_ATLAS_SIZE,
+		.m_AtlasHeight = VG_CONFIG_MIN_FONT_ATLAS_SIZE,
+		// NOTE: White rect might get too large but since the atlas limit is the texture size limit
+		// it should be that large. Otherwise shapes cached when the atlas was 512x512 will get wrong
+		// white pixel UVs when the atlas gets to the texture size limit (should not happen but better
+		// be safe).
+		.m_WhiteRectWidth = (uint16_t)(caps->limits.maxTextureSize / VG_CONFIG_MIN_FONT_ATLAS_SIZE),
+		.m_WhiteRectHeight = (uint16_t)(caps->limits.maxTextureSize / VG_CONFIG_MIN_FONT_ATLAS_SIZE),
+		.m_MaxTextureSize = caps->limits.maxTextureSize,
+		.m_Flags = FontSystemFlags::Origin_TopLeft,
+		.m_FontAtlasImageFlags = cfg->m_FontAtlasImageFlags,
+	};
 	ctx->m_FontSystem = fsCreate(ctx, allocator, &fsCfg);
 	if (!ctx->m_FontSystem) {
 		destroyContext(ctx);
