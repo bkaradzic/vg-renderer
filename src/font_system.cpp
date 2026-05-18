@@ -1578,17 +1578,29 @@ static Glyph* fsAllocGlyph(FontSystem* fs, Font* font)
 //
 #include <stb/stb_truetype.h>
 
-#define FS_STBTT_FIRST_GLYPH        0x20
-#define FS_STBTT_LAST_GLYPH         0x7E
-#define FS_STBTT_NUM_GLYPH_INDICES  (FS_STBTT_LAST_GLYPH - FS_STBTT_FIRST_GLYPH + 1)
+constexpr static int32_t FS_STBTT_FIRST_ASCII_CODEPOINT = 0x20;
+constexpr static int32_t FS_STBTT_LAST_ASCII_CODEPOINT  = 0x7E;
+constexpr static int32_t FS_STBTT_NUM_ASCII_GLYPHS = (FS_STBTT_LAST_ASCII_CODEPOINT - FS_STBTT_FIRST_ASCII_CODEPOINT + 1);
 
 struct FontStb
 {
-	stbtt_fontinfo m_Font;
-	int m_GlyphIndex[FS_STBTT_NUM_GLYPH_INDICES];
-	int* m_Kern;
-	int m_MinGlyphIndex;
-	int m_MaxGlyphIndex;
+	stbtt_fontinfo font;
+	int ascii_min_glyph_index;
+	int ascii_max_glyph_index;
+	int ascii_to_glyph_index[FS_STBTT_NUM_ASCII_GLYPHS];
+	int16_t kern_ascii[FS_STBTT_NUM_ASCII_GLYPHS * FS_STBTT_NUM_ASCII_GLYPHS];
+	uint8_t *glyph_index_to_ascii; // Contains zero if the glyph is non-ASCII.
+
+	// @mcourteaux: This marks for which combination of glyph indices
+	// there exists a non-zero kerning value. Every slot in this array is 2 bit:
+	//  00 - not looked up yet.
+	//  01 - known to be zero
+	//  10 - known to be non-zero
+	//  11 - [unused]
+	// May be NULL if the ascii glyphs are densly packed in the font file, and
+	// this strategy will not produce any speedup: all the relevant kerning
+	// data is already in kern_ascii.
+	uint64_t *kern_codemap;
 };
 
 static bool fsBackendInit(FontSystem* fs)
@@ -1606,39 +1618,48 @@ static void* fsBackendLoadFont(FontSystem* fs, uint8_t* data, uint32_t dataSize)
 	FontStb* font = (FontStb*)bx::alloc(allocator, sizeof(FontStb));
 	bx::memSet(font, 0, sizeof(FontStb));
 
-	font->m_Font.userdata = nullptr;
-	int32_t stbError = stbtt_InitFont(&font->m_Font, data, 0);
+	font->font.userdata = nullptr;
+	int32_t stbError = stbtt_InitFont(&font->font, data, 0);
 	if (!stbError) {
 		bx::free(allocator, font);
 		return nullptr;
 	}
 
-	int32_t minGlyphIndex = INT32_MAX;
-	int32_t maxGlyphIndex = INT32_MIN;
-	for (uint32_t cp = FS_STBTT_FIRST_GLYPH; cp <= FS_STBTT_LAST_GLYPH; ++cp) {
-		const int32_t gi = stbtt_FindGlyphIndex(&font->m_Font, cp);
-		font->m_GlyphIndex[cp - FS_STBTT_FIRST_GLYPH] = gi;
+	int32_t minAsciiGlyphIndex = INT32_MAX;
+	int32_t maxAsciiGlyphIndex = INT32_MIN;
+	for (uint32_t cp = FS_STBTT_FIRST_ASCII_CODEPOINT; cp <= FS_STBTT_LAST_ASCII_CODEPOINT; ++cp)
+	{
+		const int32_t gi = stbtt_FindGlyphIndex(&font->font, cp);
+		font->ascii_to_glyph_index[cp - FS_STBTT_FIRST_ASCII_CODEPOINT] = gi;
 
-		if (gi < minGlyphIndex) {
-			minGlyphIndex = gi;
-		}
-		if (gi > maxGlyphIndex) {
-			maxGlyphIndex = gi;
-		}
+		minAsciiGlyphIndex = bx::min(minAsciiGlyphIndex, gi);
+		maxAsciiGlyphIndex = bx::max(maxAsciiGlyphIndex, gi);
 	}
 
-	font->m_MinGlyphIndex = minGlyphIndex;
-	font->m_MaxGlyphIndex = maxGlyphIndex;
+	font->ascii_min_glyph_index = minAsciiGlyphIndex;
+	font->ascii_max_glyph_index = maxAsciiGlyphIndex;
 
-	const uint32_t numGlyphs = maxGlyphIndex - minGlyphIndex + 1;
-	const uint32_t totalPairs = numGlyphs * numGlyphs;
-	font->m_Kern = (int32_t*)bx::alloc(allocator, sizeof(int32_t) * totalPairs);
-	if (font->m_Kern) {
-		for (int32_t second = minGlyphIndex; second <= maxGlyphIndex; ++second) {
-			const int32_t mult = (second - minGlyphIndex) * numGlyphs;
-			for (int32_t first = minGlyphIndex; first <= maxGlyphIndex; ++first) {
-				font->m_Kern[first - minGlyphIndex + mult] = stbtt_GetGlyphKernAdvance(&font->m_Font, first, second);
-			}
+	const int range_glyph_indices_ascii = maxAsciiGlyphIndex - minAsciiGlyphIndex + 1;
+	{
+		const int total_pairs = font->font.numGlyphs * font->font.numGlyphs;
+		const int total_bits = total_pairs * 2;
+		const int total_uint64s = (total_bits + 63) / 64;
+		font->kern_codemap = (uint64_t*)bx::alloc(allocator, total_uint64s * sizeof(uint64_t));
+		bx::memSet(font->kern_codemap, 0, total_uint64s * sizeof(uint64_t));
+	}
+	font->glyph_index_to_ascii = (uint8_t*)bx::alloc(allocator, sizeof(uint8_t) * range_glyph_indices_ascii);
+	if (font->glyph_index_to_ascii)
+	{
+		// MC: Clear the array the dummy value meaning the value is not cached yet.
+		for (int i = 0; i < FS_STBTT_NUM_ASCII_GLYPHS * FS_STBTT_NUM_ASCII_GLYPHS; ++i) {
+			font->kern_ascii[i] = INT16_MIN;
+		}
+		for (int i = 0; i < range_glyph_indices_ascii; ++i) {
+			font->glyph_index_to_ascii[i] = 0;
+		}
+		for (int cp = FS_STBTT_FIRST_ASCII_CODEPOINT; cp <= FS_STBTT_LAST_ASCII_CODEPOINT; ++cp) {
+			int glyphIdx = stbtt_FindGlyphIndex(&font->font, cp);
+			font->glyph_index_to_ascii[glyphIdx - font->ascii_min_glyph_index] = cp;
 		}
 	}
 
@@ -1654,14 +1675,17 @@ static void fsBackendFreeFont(FontSystem* fs, void* fontPtr)
 
 	bx::AllocatorI* allocator = fs->m_Allocator;
 
-	bx::free(allocator, font->m_Kern);
+	bx::free(allocator, font->kern_ascii);
+	if (font->kern_codemap) {
+		bx::free(allocator, font->kern_codemap);
+	}
 	bx::free(allocator, font);
 }
 
 static void fsBackendGetFontVMetrics(void* fontPtr, int32_t* ascent, int32_t* descent, int32_t* lineGap)
 {
 	FontStb* font = (FontStb*)fontPtr;
-	stbtt_GetFontVMetrics(&font->m_Font, ascent, descent, lineGap);
+	stbtt_GetFontVMetrics(&font->font, ascent, descent, lineGap);
 }
 
 static float fsBackendGetPixelHeightScale(void* fontPtr, float size)
@@ -1670,47 +1694,95 @@ static float fsBackendGetPixelHeightScale(void* fontPtr, float size)
 #if FS_CONFIG_FONT_SIZE_EM
 	return stbtt_ScaleForMappingEmToPixels(&font->m_Font, size);
 #else
-	return stbtt_ScaleForPixelHeight(&font->m_Font, size);
+	return stbtt_ScaleForPixelHeight(&font->font, size);
 #endif
 }
 
 static int32_t fsBackendGetGlyphIndex(void* fontPtr, uint32_t codepoint)
 {
 	FontStb* font = (FontStb*)fontPtr;
-	if (codepoint >= FS_STBTT_FIRST_GLYPH && codepoint <= FS_STBTT_LAST_GLYPH) {
-		return font->m_GlyphIndex[codepoint - FS_STBTT_FIRST_GLYPH];
+	if (codepoint >= FS_STBTT_FIRST_ASCII_CODEPOINT && codepoint <= FS_STBTT_LAST_ASCII_CODEPOINT) {
+		return font->ascii_to_glyph_index[codepoint - FS_STBTT_FIRST_ASCII_CODEPOINT];
 	}
 
-	return stbtt_FindGlyphIndex(&font->m_Font, codepoint);
+	return stbtt_FindGlyphIndex(&font->font, codepoint);
 }
 
 static bool fsBackendBuildGlyphBitmap(void* fontPtr, int32_t glyph, float size, float scale, int32_t* advance, int32_t* lsb, int32_t* x0, int32_t* y0, int32_t* x1, int32_t* y1)
 {
 	BX_UNUSED(size);
 	FontStb* font = (FontStb*)fontPtr;
-	stbtt_GetGlyphHMetrics(&font->m_Font, glyph, advance, lsb);
-	stbtt_GetGlyphBitmapBox(&font->m_Font, glyph, scale, scale, x0, y0, x1, y1);
+	stbtt_GetGlyphHMetrics(&font->font, glyph, advance, lsb);
+	stbtt_GetGlyphBitmapBox(&font->font, glyph, scale, scale, x0, y0, x1, y1);
 	return true;
 }
 
 static void fsBackendRenderGlyphBitmap(void* fontPtr, uint8_t* output, int32_t outWidth, int32_t outHeight, int32_t outStride, float scaleX, float scaleY, int glyph)
 {
 	FontStb* font = (FontStb*)fontPtr;
-	stbtt_MakeGlyphBitmap(&font->m_Font, output, outWidth, outHeight, outStride, scaleX, scaleY, glyph);
+	stbtt_MakeGlyphBitmap(&font->font, output, outWidth, outHeight, outStride, scaleX, scaleY, glyph);
 }
 
 static int32_t fsBackendGetGlyphKernAdvance(void* fontPtr, int32_t glyph1, int32_t glyph2)
 {
 	FontStb* font = (FontStb*)fontPtr;
-	const int minID = font->m_MinGlyphIndex;
-	const int maxID = font->m_MaxGlyphIndex;
-	if (glyph1 >= minID && glyph1 <= maxID && glyph2 >= minID && glyph2 <= maxID) {
+
+	const int minID = font->ascii_min_glyph_index;
+	const int maxID = font->ascii_max_glyph_index;
+	if(glyph1 >= minID && glyph1 <= maxID && glyph2 >= minID && glyph2 <= maxID) {
 		const int g1 = glyph1 - minID;
 		const int g2 = glyph2 - minID;
-		const int combo = g1 + g2 * (maxID - minID + 1);
-		return font->m_Kern[combo];
+
+		/* Check for ASCII-ASCII pairs */
+		{
+			uint8_t ascii_codepoint_1 = font->glyph_index_to_ascii[g1];
+			uint8_t ascii_codepoint_2 = font->glyph_index_to_ascii[g2];
+			if (ascii_codepoint_1 != 0 && ascii_codepoint_2 != 0) {
+				int32_t i1 = ascii_codepoint_1 - FS_STBTT_FIRST_ASCII_CODEPOINT;
+				int32_t i2 = ascii_codepoint_2 - FS_STBTT_FIRST_ASCII_CODEPOINT;
+				//// MC: Implement Rosenberg-Strong's pairing function to look up
+				//// indices to compact memory usage for fonts with a lot of glyphs.
+				const int max = bx::max(i1, i2);
+				const int combo = max * max + max + i1 - i2;
+				int16_t kern = font->kern_ascii[combo];
+				if (kern == INT16_MIN) {
+					kern = bx::saturateCast<int16_t>(stbtt_GetGlyphKernAdvance(&font->font, glyph1, glyph2));
+					font->kern_ascii[combo] = kern;
+				}
+				return kern;
+			}
+		}
+
+		if (font->kern_codemap)
+		{
+			const int combo = g1 + g2 * (maxID - minID + 1);
+			int32_t uint64_idx = (combo * 2) / (sizeof(uint64_t) * 8);
+			int32_t bit_idx = (combo * 2) % (sizeof(uint64_t) * 8);
+
+			uint64_t uint64_entry = font->kern_codemap[uint64_idx];
+			int8_t status = (uint64_entry >> bit_idx) & 3;
+			if (status == 0) {
+				// Unknown
+				int kern = stbtt_GetGlyphKernAdvance(&font->font, glyph1, glyph2);
+				if (kern == 0) {
+					// Update to known-to-be-zero
+					uint64_entry |= 1 << bit_idx;
+				} else {
+					// Update to known-to-be-non-zero
+					uint64_entry |= 2 << bit_idx;
+				}
+				font->kern_codemap[uint64_idx] = uint64_entry;
+				return kern;
+			} else if (status == 1) {
+				// Known to be zero
+				return 0;
+			} else {
+				// Known to be non-zero
+				return stbtt_GetGlyphKernAdvance(&font->font, glyph1, glyph2);
+			}
+		}
 	}
 
-	return stbtt_GetGlyphKernAdvance(&font->m_Font, glyph1, glyph2);
+	return stbtt_GetGlyphKernAdvance(&font->font, glyph1, glyph2);
 }
 }
