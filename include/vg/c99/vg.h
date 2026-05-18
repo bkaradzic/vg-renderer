@@ -386,6 +386,7 @@ VG_C_API void vg_clTransformTranslate(vg_context* ctx, vg_command_list_handle ha
 VG_C_API void vg_clTransformRotate(vg_context* ctx, vg_command_list_handle handle, float ang_rad);
 VG_C_API void vg_clTransformMult(vg_context* ctx, vg_command_list_handle handle, const float* mtx, vg_transform_order order);
 VG_C_API void vg_clSetViewBox(vg_context* ctx, vg_command_list_handle handle, float x, float y, float w, float h);
+VG_C_API void vg_clSetGlobalAlpha(vg_context* ctx, vg_command_list_handle handle, float alpha);
 
 VG_C_API void vg_clText(vg_context* ctx, vg_command_list_handle handle, const vg_text_config* cfg, float x, float y, const char* str, const char* end);
 VG_C_API void vg_clTextBox(vg_context* ctx, vg_command_list_handle handle, const vg_text_config* cfg, float x, float y, float breakWidth, const char* str, const char* end, uint32_t textboxFlags);

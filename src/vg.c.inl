@@ -647,6 +647,12 @@ VG_C_API void vg_clSetViewBox(vg_context* ctx, vg_command_list_handle clh, float
 	vg::clSetViewBox((vg::Context*)ctx, handle.cpp, x, y, w, h);
 }
 
+VG_C_API void vg_clSetGlobalAlpha(vg_context* ctx, vg_command_list_handle clh, float alpha)
+{
+	union { vg_command_list_handle c; vg::CommandListHandle cpp; } handle = { clh };
+	vg::clSetGlobalAlpha((vg::Context*)ctx, handle.cpp, alpha);
+}
+
 VG_C_API void vg_clText(vg_context* ctx, vg_command_list_handle clh, const vg_text_config* cfg, float x, float y, const char* str, const char* end)
 {
 	union { vg_command_list_handle c; vg::CommandListHandle cpp; } handle = { clh };
