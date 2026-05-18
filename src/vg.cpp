@@ -911,7 +911,11 @@ void end(Context* ctx)
 			if (!bx::memCmp(cmdScissorRect, &prevScissorRect[0], sizeof(uint16_t) * 4)) {
 				bgfx::setScissor(prevScissorID);
 			} else {
-				prevScissorID = bgfx::setScissor(cmdScissorRect[0] * devicePixelRatio, cmdScissorRect[1] * devicePixelRatio, cmdScissorRect[2] * devicePixelRatio, cmdScissorRect[3] * devicePixelRatio);
+				prevScissorID = bgfx::setScissor(
+					cmdScissorRect[0] * devicePixelRatio,
+					cmdScissorRect[1] * devicePixelRatio,
+					cmdScissorRect[2] * devicePixelRatio,
+					cmdScissorRect[3] * devicePixelRatio);
 				bx::memCopy(prevScissorRect, cmdScissorRect, sizeof(uint16_t) * 4);
 			}
 		}
