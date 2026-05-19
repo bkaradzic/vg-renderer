@@ -177,12 +177,12 @@ static void resetGeometry(Stroker* stroker);
 static void expandIB(Stroker* stroker, uint32_t n);
 static void expandVB(Stroker* stroker, uint32_t n);
 
-template<bool _Closed, LineCap::Enum _LineCap, LineJoin::Enum _LineJoin>
-static void polylineStroke(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numPathVertices, float strokeWidth);
-template<bool _Closed, LineCap::Enum _LineCap, LineJoin::Enum _LineJoin>
-static void polylineStrokeAA(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numPathVertices, float strokeWidth, Color color);
 template<LineCap::Enum _LineCap, LineJoin::Enum _LineJoin>
-static void polylineStrokeAAThin(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numPathVertices, Color color, bool closed);
+static void polylineStroke(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numPathVertices, float strokeWidth, bool isClosed);
+template<LineCap::Enum _LineCap, LineJoin::Enum _LineJoin>
+static void polylineStrokeAA(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numPathVertices, float strokeWidth, Color color, bool isClosed);
+template<LineCap::Enum _LineCap, LineJoin::Enum _LineJoin>
+static void polylineStrokeAAThin(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numPathVertices, Color color, bool isClosed);
 
 template<uint32_t N>
 static void addPos(Stroker* stroker, const Vec2* srcPos);
@@ -231,97 +231,89 @@ void strokerReset(Stroker* stroker, float scale, float tesselationTolerance, flo
 
 void strokerPolylineStroke(Stroker* stroker, Mesh* mesh, const float* vertexList, uint32_t numPathVertices, bool isClosed, float strokeWidth, LineCap::Enum lineCap, LineJoin::Enum lineJoin)
 {
-	const uint8_t perm = (((uint8_t)lineCap) << 1)
-		| (((uint8_t)lineJoin) << 3)
-		| (isClosed ? 0x01 : 0x00);
-
 	const Vec2* vtx = (const Vec2*)vertexList;
+#define CID(lineCap, lineJoin) (((uint8_t)(lineCap)) | ((((uint8_t)(lineJoin)) << 2)))
+#define CASE(lineCap, lineJoin)						 \
+	case CID(LineCap::lineCap, LineJoin::lineJoin):  \
+		 polylineStroke<LineCap::lineCap, LineJoin::lineJoin>(stroker, mesh, vtx, numPathVertices, strokeWidth, isClosed); \
+	break
 
-	switch (perm) {
-	case  0: polylineStroke<false, LineCap::Butt, LineJoin::Miter>(stroker, mesh, vtx, numPathVertices, strokeWidth);   break;
-	case  1: polylineStroke<true, LineCap::Butt, LineJoin::Miter>(stroker, mesh, vtx, numPathVertices, strokeWidth);    break;
-	case  2: polylineStroke<false, LineCap::Round, LineJoin::Miter>(stroker, mesh, vtx, numPathVertices, strokeWidth);  break;
-	case  3: polylineStroke<true, LineCap::Butt, LineJoin::Miter>(stroker, mesh, vtx, numPathVertices, strokeWidth);    break;
-	case  4: polylineStroke<false, LineCap::Square, LineJoin::Miter>(stroker, mesh, vtx, numPathVertices, strokeWidth); break;
-	case  5: polylineStroke<true, LineCap::Butt, LineJoin::Miter>(stroker, mesh, vtx, numPathVertices, strokeWidth);    break;
-		// 6 to 7 == invalid line cap type
-	case  8: polylineStroke<false, LineCap::Butt, LineJoin::Round>(stroker, mesh, vtx, numPathVertices, strokeWidth);   break;
-	case  9: polylineStroke<true, LineCap::Butt, LineJoin::Round>(stroker, mesh, vtx, numPathVertices, strokeWidth);    break;
-	case 10: polylineStroke<false, LineCap::Round, LineJoin::Round>(stroker, mesh, vtx, numPathVertices, strokeWidth);  break;
-	case 11: polylineStroke<true, LineCap::Butt, LineJoin::Round>(stroker, mesh, vtx, numPathVertices, strokeWidth);    break;
-	case 12: polylineStroke<false, LineCap::Square, LineJoin::Round>(stroker, mesh, vtx, numPathVertices, strokeWidth); break;
-	case 13: polylineStroke<true, LineCap::Butt, LineJoin::Round>(stroker, mesh, vtx, numPathVertices, strokeWidth);    break;
-		// 14 to 15 == invalid line cap type
-	case 16: polylineStroke<false, LineCap::Butt, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, strokeWidth);   break;
-	case 17: polylineStroke<true, LineCap::Butt, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, strokeWidth);    break;
-	case 18: polylineStroke<false, LineCap::Round, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, strokeWidth);  break;
-	case 19: polylineStroke<true, LineCap::Butt, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, strokeWidth);    break;
-	case 20: polylineStroke<false, LineCap::Square, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, strokeWidth); break;
-	case 21: polylineStroke<true, LineCap::Butt, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, strokeWidth);    break;
-		// 22 to 32 == invalid line join type
+	switch (CID(lineCap, lineJoin)) {
+		CASE(Butt, Miter);
+		CASE(Round, Miter);
+		CASE(Square, Miter);
+
+		CASE(Butt, Round);
+		CASE(Round, Round);
+		CASE(Square, Round);
+
+		CASE(Butt, Bevel);
+		CASE(Round, Bevel);
+		CASE(Square, Bevel);
 	default:
 		VG_WARN(false, "Invalid stroke configuration");
 		break;
 	}
+#undef CID
+#undef CASE
 }
 
 void strokerPolylineStrokeAA(Stroker* stroker, Mesh* mesh, const float* vertexList, uint32_t numPathVertices, bool isClosed, Color color, float strokeWidth, LineCap::Enum lineCap, LineJoin::Enum lineJoin)
 {
-	const uint8_t perm = (((uint8_t)lineCap) << 1)
-		| (((uint8_t)lineJoin) << 3)
-		| (isClosed ? 0x01 : 0x00);
-
 	const Vec2* vtx = (const Vec2*)vertexList;
+#define CID(lineCap, lineJoin) (((uint8_t)(lineCap)) | ((((uint8_t)(lineJoin)) << 2)))
+#define CASE(lineCap, lineJoin)						 \
+	case CID(LineCap::lineCap, LineJoin::lineJoin):  \
+		 polylineStrokeAA<LineCap::lineCap, LineJoin::lineJoin>(stroker, mesh, vtx, numPathVertices, strokeWidth, color, isClosed); \
+	break
 
-	switch (perm) {
-	case  0: polylineStrokeAA<false, LineCap::Butt, LineJoin::Miter>(stroker, mesh, vtx, numPathVertices, strokeWidth, color);   break;
-	case  1: polylineStrokeAA<true, LineCap::Butt, LineJoin::Miter>(stroker, mesh, vtx, numPathVertices, strokeWidth, color);    break;
-	case  2: polylineStrokeAA<false, LineCap::Round, LineJoin::Miter>(stroker, mesh, vtx, numPathVertices, strokeWidth, color);  break;
-	case  3: polylineStrokeAA<true, LineCap::Butt, LineJoin::Miter>(stroker, mesh, vtx, numPathVertices, strokeWidth, color);    break;
-	case  4: polylineStrokeAA<false, LineCap::Square, LineJoin::Miter>(stroker, mesh, vtx, numPathVertices, strokeWidth, color); break;
-	case  5: polylineStrokeAA<true, LineCap::Butt, LineJoin::Miter>(stroker, mesh, vtx, numPathVertices, strokeWidth, color);    break;
-		// 6 to 7 == invalid line cap type
-	case  8: polylineStrokeAA<false, LineCap::Butt, LineJoin::Round>(stroker, mesh, vtx, numPathVertices, strokeWidth, color);   break;
-	case  9: polylineStrokeAA<true, LineCap::Butt, LineJoin::Round>(stroker, mesh, vtx, numPathVertices, strokeWidth, color);    break;
-	case 10: polylineStrokeAA<false, LineCap::Round, LineJoin::Round>(stroker, mesh, vtx, numPathVertices, strokeWidth, color);  break;
-	case 11: polylineStrokeAA<true, LineCap::Butt, LineJoin::Round>(stroker, mesh, vtx, numPathVertices, strokeWidth, color);    break;
-	case 12: polylineStrokeAA<false, LineCap::Square, LineJoin::Round>(stroker, mesh, vtx, numPathVertices, strokeWidth, color); break;
-	case 13: polylineStrokeAA<true, LineCap::Butt, LineJoin::Round>(stroker, mesh, vtx, numPathVertices, strokeWidth, color);    break;
-		// 14 to 15 == invalid line cap type
-	case 16: polylineStrokeAA<false, LineCap::Butt, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, strokeWidth, color);   break;
-	case 17: polylineStrokeAA<true, LineCap::Butt, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, strokeWidth, color);    break;
-	case 18: polylineStrokeAA<false, LineCap::Round, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, strokeWidth, color);  break;
-	case 19: polylineStrokeAA<true, LineCap::Butt, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, strokeWidth, color);    break;
-	case 20: polylineStrokeAA<false, LineCap::Square, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, strokeWidth, color); break;
-	case 21: polylineStrokeAA<true, LineCap::Butt, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, strokeWidth, color);    break;
-		// 22 to 32 == invalid line join type
+	switch (CID(lineCap, lineJoin)) {
+		CASE(Butt, Miter);
+		CASE(Round, Miter);
+		CASE(Square, Miter);
+
+		CASE(Butt, Round);
+		CASE(Round, Round);
+		CASE(Square, Round);
+
+		CASE(Butt, Bevel);
+		CASE(Round, Bevel);
+		CASE(Square, Bevel);
 	default:
 		VG_WARN(false, "Invalid stroke configuration");
 		break;
 	}
+#undef CID
+#undef CASE
 }
 
 void strokerPolylineStrokeAAThin(Stroker* stroker, Mesh* mesh, const float* vertexList, uint32_t numPathVertices, bool isClosed, Color color, LineCap::Enum lineCap, LineJoin::Enum lineJoin)
 {
-	// TODO: Why is isClosed passed as argument instead of template param?
-	const uint8_t perm = ((uint8_t)lineCap) | (((uint8_t)lineJoin) << 2);
-
 	const Vec2* vtx = (const Vec2*)vertexList;
+#define CID(lineCap, lineJoin) (((uint8_t)(lineCap)) | ((((uint8_t)(lineJoin)) << 2)))
+#define CASE(lineCap, lineJoin)						 \
+	case CID(LineCap::lineCap, LineJoin::lineJoin):  \
+		 polylineStrokeAAThin<LineCap::lineCap, LineJoin::lineJoin>(stroker, mesh, vtx, numPathVertices, color, isClosed); \
+	break
 
-	switch (perm) {
-	case  0: polylineStrokeAAThin<LineCap::Butt, LineJoin::Miter>(stroker, mesh, vtx, numPathVertices, color, isClosed);   break;
-	case  1: polylineStrokeAAThin<LineCap::Square, LineJoin::Miter>(stroker, mesh, vtx, numPathVertices, color, isClosed);   break;
-	case  2: polylineStrokeAAThin<LineCap::Square, LineJoin::Miter>(stroker, mesh, vtx, numPathVertices, color, isClosed);   break;
-	case  4: polylineStrokeAAThin<LineCap::Butt, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, color, isClosed);   break;
-	case  5: polylineStrokeAAThin<LineCap::Square, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, color, isClosed);   break;
-	case  6: polylineStrokeAAThin<LineCap::Square, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, color, isClosed);   break;
-	case  8: polylineStrokeAAThin<LineCap::Butt, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, color, isClosed);   break;
-	case  9: polylineStrokeAAThin<LineCap::Square, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, color, isClosed);   break;
-	case 10: polylineStrokeAAThin<LineCap::Square, LineJoin::Bevel>(stroker, mesh, vtx, numPathVertices, color, isClosed);   break;
+	switch (CID(lineCap, lineJoin)) {
+		CASE(Butt, Miter);
+		CASE(Round, Miter);
+		CASE(Square, Miter);
+
+		CASE(Butt, Round);
+		CASE(Round, Round);
+		CASE(Square, Round);
+
+		CASE(Butt, Bevel);
+		CASE(Round, Bevel);
+		CASE(Square, Bevel);
 	default:
 		VG_WARN(false, "Invalid stroke configuration");
 		break;
 	}
+#undef CID
+#undef CASE
 }
 
 void strokerConvexFill(Stroker* stroker, Mesh* mesh, const float* vertexList, uint32_t numVertices)
@@ -1020,10 +1012,10 @@ bool strokerConcaveFillEndAA(Stroker* stroker, Mesh* mesh, uint32_t color, FillR
 //////////////////////////////////////////////////////////////////////////
 // Templates
 //
-template<bool _Closed, LineCap::Enum _LineCap, LineJoin::Enum _LineJoin>
-void polylineStroke(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numPathVertices, float strokeWidth)
+template<LineCap::Enum _LineCap, LineJoin::Enum _LineJoin>
+void polylineStroke(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numPathVertices, float strokeWidth, bool isClosed)
 {
-	const uint32_t numSegments = numPathVertices - (_Closed ? 0 : 1);
+	const uint32_t numSegments = numPathVertices - (isClosed ? 0 : 1);
 	const float hsw = strokeWidth * 0.5f;
 	const float da = bx::acos((stroker->m_Scale * hsw) / ((stroker->m_Scale * hsw) + stroker->m_TesselationTolerance)) * 2.0f;
 	const uint32_t numPointsHalfCircle = bx::max(2u, (uint32_t)bx::ceil(bx::kPi / da));
@@ -1035,7 +1027,7 @@ void polylineStroke(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numP
 	uint16_t prevSegmentRightID = 0xFFFF;
 	uint16_t firstSegmentLeftID = 0xFFFF;
 	uint16_t firstSegmentRightID = 0xFFFF;
-	if (!_Closed) {
+	if (!isClosed) {
 		// First segment of an open path
 		const Vec2& p0 = vtx[0];
 		const Vec2& p1 = vtx[1];
@@ -1100,7 +1092,7 @@ void polylineStroke(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numP
 		d01 = vec2Dir(vtx[numPathVertices - 1], vtx[0]);
 	}
 
-	const uint32_t firstSegmentID = _Closed ? 0 : 1;
+	const uint32_t firstSegmentID = isClosed ? 0 : 1;
 	for (uint32_t iSegment = firstSegmentID; iSegment < numSegments; ++iSegment) {
 		const Vec2& p1 = vtx[iSegment];
 		const Vec2& p2 = vtx[iSegment == numPathVertices - 1 ? 0 : iSegment + 1];
@@ -1402,10 +1394,10 @@ void polylineStroke(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numP
 	mesh->m_NumIndices = stroker->m_NumIndices;
 }
 
-template<bool _Closed, LineCap::Enum _LineCap, LineJoin::Enum _LineJoin>
-void polylineStrokeAA(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numPathVertices, float strokeWidth, Color color)
+template<LineCap::Enum _LineCap, LineJoin::Enum _LineJoin>
+void polylineStrokeAA(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numPathVertices, float strokeWidth, Color color, bool isClosed)
 {
-	const uint32_t numSegments = numPathVertices - (_Closed ? 0 : 1);
+	const uint32_t numSegments = numPathVertices - (isClosed ? 0 : 1);
 	const uint32_t c0 = colorSetAlpha(color, 0);
 	const uint32_t c0_c_c_c0[4] = { c0, color, color, c0 };
 	const float hsw = (strokeWidth - stroker->m_FringeWidth) * 0.5f;
@@ -1425,7 +1417,7 @@ void polylineStrokeAA(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t nu
 	uint16_t firstSegmentRightID = 0xFFFF;
 	uint16_t firstSegmentRightAAID = 0xFFFF;
 
-	if (!_Closed) {
+	if (!isClosed) {
 		// First segment of an open path
 		const Vec2& p0 = vtx[0];
 		const Vec2& p1 = vtx[1];
@@ -1535,7 +1527,7 @@ void polylineStrokeAA(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t nu
 		d01	= vec2Dir(vtx[numPathVertices - 1], vtx[0]);
 	}
 
-	const uint32_t firstSegmentID = _Closed ? 0 : 1;
+	const uint32_t firstSegmentID = isClosed ? 0 : 1;
 	for (uint32_t iSegment = firstSegmentID; iSegment < numSegments; ++iSegment) {
 		const Vec2& p1 = vtx[iSegment];
 		const Vec2& p2 = vtx[iSegment == numPathVertices - 1 ? 0 : iSegment + 1];
@@ -1581,7 +1573,7 @@ void polylineStrokeAA(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t nu
 					expandIB(stroker, 18);
 					addIndices<18>(stroker, &id[0]);
 				} else {
-					VG_CHECK(_Closed, "Invalid previous segment");
+					VG_CHECK(isClosed, "Invalid previous segment");
 					firstSegmentLeftAAID = firstVertexID; // 0
 					firstSegmentLeftID = firstVertexID + 1; // 1
 					firstSegmentRightID = firstVertexID + 2; // 2
@@ -1678,7 +1670,7 @@ void polylineStrokeAA(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t nu
 					expandIB(stroker, 18);
 					addIndices<18>(stroker, &id[0]);
 				} else {
-					VG_CHECK(_Closed, "Invalid previous segment");
+					VG_CHECK(isClosed, "Invalid previous segment");
 					firstSegmentLeftAAID = firstFanVertexID; // 0
 					firstSegmentLeftID = firstFanVertexID + 1; // 1
 					firstSegmentRightID = firstFanVertexID + 2; // 2
@@ -1864,7 +1856,7 @@ void polylineStrokeAA(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t nu
 		d01 = d12;
 	}
 
-	if (!_Closed) {
+	if (!isClosed) {
 		// Last segment of an open path
 		const Vec2& p1 = vtx[numPathVertices - 1];
 
