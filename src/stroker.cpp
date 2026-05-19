@@ -55,14 +55,14 @@ inline Vec2 calcExtrusionVector(const Vec2& d01, const Vec2& d12)
 #if VG_CONFIG_ENABLE_SIMD
 static const bx::simd128_t vec2_perpCCW_xorMask = bx::simd128_ld(0x80000000u, 0u, 0u, 0u);
 
-static inline bx::simd128_t xmm_vec2_rotCCW90(const bx::simd128_t a)
+static inline bx::simd128_t simd128_vec2_rotCCW90(const bx::simd128_t a)
 {
 	const bx::simd128_t ayx    = bx::simd128_x32_swiz_yxzw(a); // { a.y, a.x, a.z, a.w }
 	const bx::simd128_t result = bx::simd128_xor(ayx, vec2_perpCCW_xorMask); // { -a.y, a.x, DC, DC }
 	return result;
 }
 
-static inline float xmm_vec2_cross(const bx::simd128_t a, const bx::simd128_t b)
+static inline float simd128_vec2_cross(const bx::simd128_t a, const bx::simd128_t b)
 {
 	// a.x * b.y - a.y * b.x
 	const bx::simd128_t a_xy      = a;
@@ -73,7 +73,7 @@ static inline float xmm_vec2_cross(const bx::simd128_t a, const bx::simd128_t b)
 	return bx::simd128_f32_x(cross);
 }
 
-static inline bx::simd128_t xmm_vec2_dir(const bx::simd128_t a, const bx::simd128_t b)
+static inline bx::simd128_t simd128_vec2_dir(const bx::simd128_t a, const bx::simd128_t b)
 {
 	const bx::simd128_t dxy    = bx::simd128_f32_sub(b, a); // { dx, dy, DC, DC }
 	const bx::simd128_t dxySqr = bx::simd128_f32_mul(dxy, dxy); // { dx*dx, dy*dy, DC, DC }
@@ -86,19 +86,19 @@ static inline bx::simd128_t xmm_vec2_dir(const bx::simd128_t a, const bx::simd12
 	return dir;
 }
 
-static inline bx::simd128_t xmm_calcExtrusionVector(const bx::simd128_t d01, const bx::simd128_t d12)
+static inline bx::simd128_t simd128_calc_extrusion_vector(const bx::simd128_t d01, const bx::simd128_t d12)
 {
-	const float cross = xmm_vec2_cross(d12, d01);
+	const float cross = simd128_vec2_cross(d12, d01);
 	if (bx::abs(cross) > VG_EPSILON) {
 		const bx::simd128_t diff   = bx::simd128_f32_sub(d01, d12);
 		const bx::simd128_t invX   = bx::simd128_splat(1.0f / cross);
 		const bx::simd128_t result = bx::simd128_f32_mul(diff, invX);
 		return result;
 	}
-	return xmm_vec2_rotCCW90(d01);
+	return simd128_vec2_rotCCW90(d01);
 }
 
-static inline bx::simd128_t xmm_rsqrt(bx::simd128_t a)
+static inline bx::simd128_t simd128_rsqrt(bx::simd128_t a)
 {
 #if RSQRT_ALGORITHM == 0
 	const bx::simd128_t one    = bx::simd128_splat(1.0f);
@@ -113,7 +113,7 @@ static inline bx::simd128_t xmm_rsqrt(bx::simd128_t a)
 	return res;
 }
 
-static inline bx::simd128_t xmm_rcp(bx::simd128_t a)
+static inline bx::simd128_t simd128_rcp(bx::simd128_t a)
 {
 #if RCP_ALGORITHM == 0
 	const bx::simd128_t one   = bx::simd128_splat(1.0f);
@@ -369,7 +369,7 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 	const bx::simd128_t vtx2 = bx::simd128_ld(vertexList[4],     vertexList[5],     0.0f, 0.0f);
 	const bx::simd128_t d10  = bx::simd128_f32_sub(vtx1, vtx0);
 	const bx::simd128_t d20  = bx::simd128_f32_sub(vtx2, vtx0);
-	const float cross = xmm_vec2_cross(d10, d20);
+	const float cross = simd128_vec2_cross(d10, d20);
 
 	const float aa = stroker->m_FringeWidth * 0.5f * bx::sign(cross);
 	const bx::simd128_t xmm_aa = bx::simd128_splat(aa);
@@ -389,7 +389,7 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 		expandVB(stroker, numDrawVertices);
 
 		const bx::simd128_t vtxLast = bx::simd128_ld(vertexList[lastVertexID << 1], vertexList[(lastVertexID << 1) + 1], 0.0f, 0.0f);
-		bx::simd128_t d01 = xmm_vec2_dir(vtxLast, vtx0);
+		bx::simd128_t d01 = simd128_vec2_dir(vtxLast, vtx0);
 		bx::simd128_t p1  = vtx0;
 
 		const float* srcPos = vertexList + 2;
@@ -424,8 +424,8 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 			const bx::simd128_t lenSqr123_ge_eps = bx::simd128_f32_cmpge(len12_23_sqr, xmm_epsilon);
 			const bx::simd128_t lenSqr345_ge_eps = bx::simd128_f32_cmpge(len34_45_sqr, xmm_epsilon);
 
-			const bx::simd128_t invLen12_23 = xmm_rsqrt(len12_23_sqr);
-			const bx::simd128_t invLen34_45 = xmm_rsqrt(len34_45_sqr);
+			const bx::simd128_t invLen12_23 = simd128_rsqrt(len12_23_sqr);
+			const bx::simd128_t invLen34_45 = simd128_rsqrt(len34_45_sqr);
 
 			const bx::simd128_t invLen12_23_masked = bx::simd128_and(invLen12_23, lenSqr123_ge_eps);
 			const bx::simd128_t invLen34_45_masked = bx::simd128_and(invLen34_45, lenSqr345_ge_eps);
@@ -469,7 +469,7 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 
 			const bx::simd128_t cross012_123_234_345 = bx::simd128_f32_sub(crossx012_123_234_345, crossy012_123_234_345);
 
-			const bx::simd128_t inv_cross012_123_234_345 = xmm_rcp(cross012_123_234_345);
+			const bx::simd128_t inv_cross012_123_234_345 = simd128_rcp(cross012_123_234_345);
 
 			const bx::simd128_t cross_gt_eps012_123_234_345 = bx::simd128_f32_cmpge(cross012_123_234_345, xmm_epsilon);
 
@@ -533,7 +533,7 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 			const bx::simd128_t len12_23_sqr  = bx::simd128_f32_add(d12_23_xy_sqr, d12_23_yx_sqr);
 			const bx::simd128_t lenSqr_ge_eps = bx::simd128_f32_cmpge(len12_23_sqr, xmm_epsilon);
 
-			const bx::simd128_t invLen12_23        = xmm_rsqrt(len12_23_sqr);
+			const bx::simd128_t invLen12_23        = simd128_rsqrt(len12_23_sqr);
 			const bx::simd128_t invLen12_23_masked = bx::simd128_and(invLen12_23, lenSqr_ge_eps);
 			const bx::simd128_t d12_23_norm        = bx::simd128_f32_mul(d12_23, invLen12_23_masked);
 
@@ -554,7 +554,7 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 
 			const bx::simd128_t cross012_123 = bx::simd128_f32_sub(d12xd01y_d23xd12x, d12yd01x_d23yd12x);
 
-			const bx::simd128_t inv_cross012_123 = xmm_rcp(cross012_123);
+			const bx::simd128_t inv_cross012_123 = simd128_rcp(cross012_123);
 
 			const bx::simd128_t v012_123_fake = bx::simd128_xor(d01yx_d12yx, vec2x2_perpCCW_xorMask);
 
@@ -590,8 +590,8 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 
 		if (rem) {
 			const bx::simd128_t p2     = bx::simd128_ld(srcPos[0], srcPos[1], 0.0f, 0.0f);
-			const bx::simd128_t d12    = xmm_vec2_dir(p1, p2);
-			const bx::simd128_t extr   = xmm_calcExtrusionVector(d01, d12);
+			const bx::simd128_t d12    = simd128_vec2_dir(p1, p2);
+			const bx::simd128_t extr   = simd128_calc_extrusion_vector(d01, d12);
 			const bx::simd128_t v_aa   = bx::simd128_f32_mul(extr, xmm_aa);
 			const bx::simd128_t posEdge = bx::simd128_f32_add(p1, v_aa);
 			const bx::simd128_t negEdge = bx::simd128_f32_sub(p1, v_aa);
@@ -606,8 +606,8 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 
 		// Last segment
 		{
-			const bx::simd128_t dirEnd = xmm_vec2_dir(p1, vtx0);
-			const bx::simd128_t extr   = xmm_calcExtrusionVector(d01, dirEnd);
+			const bx::simd128_t dirEnd = simd128_vec2_dir(p1, vtx0);
+			const bx::simd128_t extr   = simd128_calc_extrusion_vector(d01, dirEnd);
 			const bx::simd128_t v_aa   = bx::simd128_f32_mul(extr, xmm_aa);
 			const bx::simd128_t posEdge = bx::simd128_f32_add(p1, v_aa);
 			const bx::simd128_t negEdge = bx::simd128_f32_sub(p1, v_aa);
