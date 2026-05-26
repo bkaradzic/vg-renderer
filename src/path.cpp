@@ -240,8 +240,12 @@ void pathArcTo(Path* path, float x1, float y1, float x2, float y2, float r)
 		dy1 *= invLen;
 	}
 
-	const float a = bx::acos(dx0 * dx1 + dy0 * dy1);
-	const float d = r / bx::tan(a / 2.0f);
+
+	// mcourteaux: replaced 1/tan(acos(x)/2) by rsqrt((1-x)/(1+x))
+	//	const float a = bx::acos(dx0 * dx1 + dy0 * dy1);
+	//	const float d = r / bx::tan(a / 2.0f);
+	const float dot = dx0 * dx1 + dy0 * dy1;
+	const float d = r * bx::rsqrt((1.0f - dot) / (1.0f + dot));
 
 	if (d > 10000.0f) {
 		pathLineTo(path, x1, y1);
