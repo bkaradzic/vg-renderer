@@ -248,6 +248,7 @@ void pathArcTo(Path* path, float x1, float y1, float x2, float y2, float r)
 	const float d = r * bx::rsqrt((1.0f - dot) / (1.0f + dot));
 
 	if (d > 10000.0f) {
+		// The radius is so huge, it's practically a straight line.
 		pathLineTo(path, x1, y1);
 		return;
 	}
@@ -650,6 +651,16 @@ void pathEllipse(Path* path, float cx, float cy, float rx, float ry)
 
 void pathArc(Path* path, float cx, float cy, float r, float a0, float a1, Winding::Enum dir)
 {
+	if (r < path->m_Scale) {
+		// The radius is too small to see. Just moveTo/lineTo.
+		if (path->m_CurSubPath && path->m_CurSubPath->m_NumVertices != 0) {
+			pathLineTo(path, cx, cy);
+		} else {
+			pathMoveTo(path, cx, cy);
+		}
+		return;
+	}
+
 	// a0 and a1 are CW angles from the x axis independent of the selected direction of the arc.
 	// Make sure a0 is always less than a1 and they are both inside the [0, 2*Pi] circle.
 	while (a0 > bx::kPi2) {
@@ -679,7 +690,16 @@ void pathArc(Path* path, float cx, float cy, float r, float a0, float a1, Windin
 	float sa = bx::sin(a0);
 
 	if (path->m_CurSubPath && path->m_CurSubPath->m_NumVertices != 0) {
-		pathLineTo(path, cx + r * ca, cy + r * sa);
+		float dst_x = cx + r * ca;
+		float dst_y = cy + r * sa;
+		const uint32_t lastVertexID = path->m_CurSubPath->m_FirstVertexID + (path->m_CurSubPath->m_NumVertices - 1);
+		const float* lastVertex = &path->m_Vertices[lastVertexID << 1];
+		const float dx = lastVertex[0] - dst_x;
+		const float dy = lastVertex[1] - dst_y;
+		const float distSqr = dx * dx + dy * dy;
+		if (distSqr > VG_EPSILON) {
+			pathLineTo(path, dst_x, dst_y);
+		}
 	} else {
 		pathMoveTo(path, cx + r * ca, cy + r * sa);
 	}
