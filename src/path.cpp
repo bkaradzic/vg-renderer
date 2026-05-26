@@ -295,6 +295,9 @@ void pathRoundedRect(Path* path, float x, float y, float w, float h, float r)
 
 	r = bx::min<float>(rx, ry);
 
+	const float travel_h = w - 2 * r;
+	const float travel_v = h - 2 * r;
+
 	const float da = bx::acos((path->m_Scale * r) / ((path->m_Scale * r) + path->m_TesselationTolerance)) * 2.0f;
 	const uint32_t numPointsHalfCircle = bx::max(2, (uint32_t)bx::ceil(bx::kPi / da));
 	const uint32_t numPointsQuarterCircle = (numPointsHalfCircle >> 1) + 1;
@@ -304,7 +307,9 @@ void pathRoundedRect(Path* path, float x, float y, float w, float h, float r)
 	const float sin_dtheta = bx::sin(dtheta);
 
 	pathMoveTo(path, x, y + r);
-	pathLineTo(path, x, y + h - r);
+	if (travel_v > 0.1f) {
+		pathLineTo(path, x, y + h - r);
+	}
 
 	// Bottom left quarter circle
 	{
@@ -327,7 +332,9 @@ void pathRoundedRect(Path* path, float x, float y, float w, float h, float r)
 		path->m_CurSubPath->m_NumVertices += (numPointsQuarterCircle - 1);
 	}
 
-	pathLineTo(path, x + w - r, y + h);
+	if (travel_h > 0.1f) {
+		pathLineTo(path, x + w - r, y + h);
+	}
 
 	// Bottom right quarter circle
 	{
@@ -350,7 +357,9 @@ void pathRoundedRect(Path* path, float x, float y, float w, float h, float r)
 		path->m_CurSubPath->m_NumVertices += (numPointsQuarterCircle - 1);
 	}
 
-	pathLineTo(path, x + w, y + r);
+	if (travel_v > 0.1f) {
+		pathLineTo(path, x + w, y + r);
+	}
 
 	// Top right quarter circle
 	{
@@ -373,7 +382,9 @@ void pathRoundedRect(Path* path, float x, float y, float w, float h, float r)
 		path->m_CurSubPath->m_NumVertices += (numPointsQuarterCircle - 1);
 	}
 
-	pathLineTo(path, x + r, y);
+	if (travel_h > 0.1f) {
+		pathLineTo(path, x + r, y);
+	}
 
 	// Top left quarter circle
 	{
@@ -406,13 +417,19 @@ void pathRoundedRectVarying(Path* path, float x, float y, float w, float h, floa
 		return;
 	}
 
-	const float halfw = w * 0.5f;
-	const float halfh = h * 0.5f;
+	const float halfw = w * 0.5f - VG_EPSILON;
+	const float halfh = h * 0.5f - VG_EPSILON;
 
 	const float rtl = bx::min<float>(rTopLeft, halfw, halfh);
 	const float rtr = bx::min<float>(rTopRight, halfw, halfh);
 	const float rbl = bx::min<float>(rBottomLeft, halfw, halfh);
 	const float rbr = bx::min<float>(rBottomRight, halfw, halfh);
+
+	const float travel_l = h - rtl - rbl;
+	const float travel_r = h - rtr - rbr;
+	const float travel_t = w - rtl - rtr;
+	const float travel_b = w - rbl - rbr;
+
 
 	// Top left corner
 	if (rtl < 0.1f) {
@@ -451,7 +468,9 @@ void pathRoundedRectVarying(Path* path, float x, float y, float w, float h, floa
 	if (rbl < 0.1f) {
 		pathLineTo(path, x, y + h);
 	} else {
-		pathLineTo(path, x, y + h - rbl);
+		if (travel_l >= 0.1f) {
+			pathLineTo(path, x, y + h - rbl);
+		}
 
 		const float halfDa = bx::acos((path->m_Scale * rbl) / ((path->m_Scale * rbl) + path->m_TesselationTolerance));
 		const uint32_t numPointsHalfCircle = bx::max(2, (uint32_t)bx::ceil(bx::kPiHalf / halfDa));
@@ -484,7 +503,9 @@ void pathRoundedRectVarying(Path* path, float x, float y, float w, float h, floa
 	if (rbr < 0.1f) {
 		pathLineTo(path, x + w, y + h);
 	} else {
-		pathLineTo(path, x + w - rbr, y + h);
+		if (travel_b >= 0.1f) {
+			pathLineTo(path, x + w - rbr, y + h);
+		}
 
 		const float halfDa = bx::acos((path->m_Scale * rbr) / ((path->m_Scale * rbr) + path->m_TesselationTolerance));
 		const uint32_t numPointsHalfCircle = bx::max(2, (uint32_t)bx::ceil(bx::kPiHalf / halfDa));
@@ -517,7 +538,9 @@ void pathRoundedRectVarying(Path* path, float x, float y, float w, float h, floa
 	if (rtr < 0.1f) {
 		pathLineTo(path, x + w, y);
 	} else {
-		pathLineTo(path, x + w, y + rtr);
+		if (travel_r >= 0.1f) {
+			pathLineTo(path, x + w, y + rtr);
+		}
 
 		const float halfDa = bx::acos((path->m_Scale * rtr) / ((path->m_Scale * rtr) + path->m_TesselationTolerance));
 		const uint32_t numPointsHalfCircle = bx::max(2, (uint32_t)bx::ceil(bx::kPiHalf / halfDa));
