@@ -1405,7 +1405,7 @@ ImageHandle createImage(Context* ctx, uint16_t w, uint16_t h, uint32_t flags, co
 
 		bgfx::updateTexture2D(tex->m_bgfxHandle, 0, 0, 0, 0, tex->m_Width, tex->m_Height, mem);
 	}
-	bx::printf("[VB] createImage() : img=%hu, texture=%hu\n", handle.idx, tex->m_bgfxHandle.idx);
+	//bx::printf("[VB] createImage() : img=%hu, texture=%hu\n", handle.idx, tex->m_bgfxHandle.idx);
 
 	return handle;
 }
@@ -1441,7 +1441,7 @@ ImageHandle createImage(Context* ctx, uint32_t flags, const bgfx::TextureHandle&
 	tex->m_Owned = false;
 
 	tex->m_bgfxHandle.idx = bgfxTextureHandle.idx;
-	bx::printf("[VB] createImage() : img=%hu, texture=%hu\n", handle.idx, tex->m_bgfxHandle.idx);
+	//bx::printf("[VB] createImage() : img=%hu, texture=%hu\n", handle.idx, tex->m_bgfxHandle.idx);
 
 	return handle;
 }
