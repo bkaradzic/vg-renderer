@@ -2042,7 +2042,8 @@ void polylineStrokeAAThin(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_
 				prevSegmentMiddleID = firstVertexID + 1;
 				prevSegmentRightAAID = firstVertexID + 2;
 			} else {
-				VG_CHECK(lineJoin != LineJoin::Round, "Round joins not implemented for thin strokes.");
+				// Bevel & Round are here both handled in the Bevel way. There is no point
+				// making "Round" thin strokes.
 				const Vec2 r01 = vec2PerpCW(d01);
 				const Vec2 r12 = vec2PerpCW(d12);
 
