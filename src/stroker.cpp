@@ -1950,7 +1950,10 @@ void polylineStrokeAAThin(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_
 
 		const Vec2 l01 = vec2PerpCCW(d01);
 
-		if (lineCap == LineCap::Butt) {
+		if (lineCap == LineCap::Butt || lineCap == LineCap::Round) {
+			// This is the actually correct logic for LineCap::Butt,
+			// and Round is not really implemented, but we approximate
+			// Roune LineCaps with Butt instead.
 			const Vec2 l01_hsw_aa = vec2Scale(l01, hsw_aa);
 
 			Vec2 p[3] = {
@@ -1981,8 +1984,6 @@ void polylineStrokeAAThin(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_
 			prevSegmentLeftAAID = 0;
 			prevSegmentMiddleID = 1;
 			prevSegmentRightAAID = 2;
-		} else if (lineCap == LineCap::Round) {
-			VG_CHECK(false, "Round caps not implemented for thin strokes.");
 		} else {
 			VG_CHECK(false, "Unknown line cap type");
 		}
@@ -2176,7 +2177,8 @@ void polylineStrokeAAThin(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_
 
 		const Vec2 l01 = vec2PerpCCW(d01);
 
-		if (lineCap == LineCap::Butt) {
+		if (lineCap == LineCap::Butt || lineCap == LineCap::Round) {
+			// See comment above: approximate Round with Butt.
 			const uint16_t curSegmentLeftAAID = (uint16_t)stroker->m_NumVertices;
 			const Vec2 l01_hsw_aa = vec2Scale(l01, hsw_aa);
 
@@ -2221,8 +2223,6 @@ void polylineStrokeAAThin(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_
 
 			expandIB(stroker, 12);
 			addIndices<12>(stroker, id);
-		} else if (lineCap == LineCap::Round) {
-			VG_CHECK(false, "Round caps not implemented for thin strokes.");
 		}
 	} else {
 		VG_CHECK(firstSegmentLeftAAID != 0xFFFF && firstSegmentMiddleID != 0xFFFF && firstSegmentRightAAID != 0xFFFF, "Invalid first segment");
