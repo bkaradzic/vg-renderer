@@ -7,12 +7,14 @@
 #include <bx/allocator.h>
 #include <bx/string.h>
 
-#define FS_CONFIG_LUT_SIZE           256
+#define FS_CONFIG_LUT_SIZE           1024
 #define FS_CONFIG_MAX_FALLBACK_FONTS 8
 #define FS_CONFIG_MAX_FONT_IMAGES    4
 #define FS_CONFIG_SNAP_TO_GRID       0
 #define FS_CONFIG_FONT_SIZE_EM       0
 #define FS_CONFIG_TAB_SIZE           4.0f // * Space size
+
+static_assert((FS_CONFIG_LUT_SIZE & (FS_CONFIG_LUT_SIZE - 1)) == 0, "LUT size must be a power of two.");
 
 #if FS_CONFIG_SNAP_TO_GRID
 #define FS_SNAP_COORD(coord) (float)((int32_t)((coord) + 0.5f))
@@ -45,7 +47,8 @@ struct Atlas
 struct Glyph
 {
 	uint64_t m_GlyphCode;
-	int32_t m_Next;
+	int32_t m_Next; // The index of the next glyph in the same slot in the LUT.
+	int32_t m_Count; // How frequently this glyph is needed
 	uint16_t m_RectPos[2];  // { x, y }
 	uint16_t m_RectSize[2]; // { w, h }
 	int16_t m_XAdv, m_XOff, m_YOff;
@@ -1403,13 +1406,51 @@ static Glyph* fsFontFindGlyph(Font* font, uint32_t codepoint, int16_t isize, int
 	const uint32_t hash = fsHashGlyphCode(glyphCode) & (FS_CONFIG_LUT_SIZE - 1);
 
 	int32_t id = font->m_LUT[hash];
+	int32_t prevPrevId = -1;
+	int32_t prevId = -1;
+	int32_t prevCount = bx::max<int32_t>();
+
 	while (id != -1) {
-		if (font->m_Glyphs[id].m_GlyphCode == glyphCode) {
-			return &font->m_Glyphs[id];
+		Glyph *g = &font->m_Glyphs[id];
+		int32_t nextId = g->m_Next;
+
+		if (g->m_Count > prevCount) {
+			// This glyph is more frequently accessed than the previous one.
+			// Swap 'id' with 'prevId'.
+
+			// 1. Point the node BEFORE prevId to id
+			if (prevPrevId == -1) {
+				font->m_LUT[hash] = id;
+			} else {
+				font->m_Glyphs[prevPrevId].m_Next = id;
+			}
+
+			// 2. Cross the pointers
+			g->m_Next = prevId;
+			font->m_Glyphs[prevId].m_Next = nextId;
+
+			// 3. Update traversal state for the next loop iteration
+			// After swapping, the chain order is: prevPrevId -> id -> prevId -> nextId
+			// So the node sitting immediately before nextId is now prevId.
+			prevPrevId = id;
+			// prevId remains prevId
+			prevCount = font->m_Glyphs[prevId].m_Count;
+		} else {
+			// Advance state normally if no swap occurred
+			prevPrevId = prevId;
+			prevId = id;
+			prevCount = g->m_Count;
 		}
 
-		id = font->m_Glyphs[id].m_Next;
+		// Check for the match
+		if (g->m_GlyphCode == glyphCode) {
+			g->m_Count++;
+			return g;
+		}
+
+		id = nextId;
 	}
+
 
 	return nullptr;
 }
@@ -1506,6 +1547,7 @@ static Glyph* fsBakeGlyph(FontSystem* fs, Font* font, int32_t glyphIndex, uint32
 	if (glyph == nullptr) {
 		glyph = fsAllocGlyph(fs, font);
 		glyph->m_GlyphCode = FS_MAKE_GLYPH_CODE(codepoint, isize, iblur);
+		glyph->m_Count = 0;
 
 		// Insert char to hash lookup.
 		const uint32_t h = fsHashGlyphCode(glyph->m_GlyphCode) & (FS_CONFIG_LUT_SIZE - 1);
