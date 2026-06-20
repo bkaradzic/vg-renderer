@@ -572,11 +572,16 @@ PoolAllocator::PoolAllocator(uint32_t itemSize, uint32_t numItemsPerChunk, bx::A
 PoolAllocator::~PoolAllocator()
 {
 	PoolAllocator::Chunk* chunk = m_FirstChunk;
-	while (chunk->m_Next) {
+
+	while (chunk != nullptr)
+	{
 		PoolAllocator::Chunk* nextChunk = chunk->m_Next;
 		bx::free(m_ParentAllocator, chunk);
 		chunk = nextChunk;
 	}
+
+	m_FirstChunk       = nullptr;
+	m_FirstFreeSlotPtr = nullptr;
 }
 
 void* PoolAllocator::realloc(void* _ptr, size_t _size, size_t _align, const char* _filePath, uint32_t _line)
