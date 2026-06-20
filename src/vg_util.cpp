@@ -1,5 +1,6 @@
 #include "vg_util.h"
 #include <vg/vg.h>
+#include "config.h"
 #include <bx/bx.h>
 
 #include <bx/simd_t.h>

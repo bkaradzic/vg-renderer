@@ -2,35 +2,64 @@
 #define VG_H
 
 #include <stdint.h>
-#include "config.h"
-
-#if VG_CONFIG_DEBUG
-#include <bx/debug.h>
-
-#define VG_TRACE(_format, ...) \
-	do { \
-		bx::debugPrintf(BX_FILE_LINE_LITERAL "vg " _format "\n", ##__VA_ARGS__); \
-	} while(0)
-
-#define VG_WARN(_condition, _format, ...) \
-	do { \
-		if (!(_condition) ) { \
-			VG_TRACE(BX_FILE_LINE_LITERAL _format, ##__VA_ARGS__); \
-		} \
-	} while(0)
-
-#define VG_CHECK(_condition, _format, ...) \
-	do { \
-		if (!(_condition) ) { \
-			VG_TRACE(BX_FILE_LINE_LITERAL _format, ##__VA_ARGS__); \
-			bx::debugBreak(); \
-		} \
-	} while(0)
-#else
-#define VG_TRACE(_format, ...)
-#define VG_WARN(_condition, _format, ...)
-#define VG_CHECK(_condition, _format, ...)
+// UV component type of the public vertex API (see uv_t below). This is the one
+// build-time switch that affects the public ABI; all other tuning is internal
+// (src/config.h).
+#ifndef VG_CONFIG_UV_INT16
+#	define VG_CONFIG_UV_INT16 1
 #endif
+
+#define VG_COLOR_RED_Pos     0
+#define VG_COLOR_RED_Msk     (0xFFu << VG_COLOR_RED_Pos)
+#define VG_COLOR_GREEN_Pos   8
+#define VG_COLOR_GREEN_Msk   (0xFFu << VG_COLOR_GREEN_Pos)
+#define VG_COLOR_BLUE_Pos    16
+#define VG_COLOR_BLUE_Msk    (0xFFu << VG_COLOR_BLUE_Pos)
+#define VG_COLOR_ALPHA_Pos   24
+#define VG_COLOR_ALPHA_Msk   (0xFFu << VG_COLOR_ALPHA_Pos)
+#define VG_COLOR_RGB_Msk     (VG_COLOR_RED_Msk | VG_COLOR_GREEN_Msk | VG_COLOR_BLUE_Msk)
+
+#define VG_COLOR32(r, g, b, a) (0 \
+	| (((uint32_t)(r) << VG_COLOR_RED_Pos) & VG_COLOR_RED_Msk) \
+	| (((uint32_t)(g) << VG_COLOR_GREEN_Pos) & VG_COLOR_GREEN_Msk) \
+	| (((uint32_t)(b) << VG_COLOR_BLUE_Pos) & VG_COLOR_BLUE_Msk) \
+	| (((uint32_t)(a) << VG_COLOR_ALPHA_Pos) & VG_COLOR_ALPHA_Msk) \
+)
+
+#define VG_TEXT_ALIGN_VER_Pos 0
+#define VG_TEXT_ALIGN_VER_Msk (0x03u << VG_TEXT_ALIGN_VER_Pos)
+#define VG_TEXT_ALIGN_HOR_Pos 2
+#define VG_TEXT_ALIGN_HOR_Msk (0x03u << VG_TEXT_ALIGN_HOR_Pos)
+#define VG_TEXT_ALIGN(hor, ver)  (0 \
+	| (((uint32_t)(hor) << VG_TEXT_ALIGN_HOR_Pos) & VG_TEXT_ALIGN_HOR_Msk) \
+	| (((uint32_t)(ver) << VG_TEXT_ALIGN_VER_Pos) & VG_TEXT_ALIGN_VER_Msk) \
+)
+
+#define VG_STROKE_FLAGS_LINE_JOIN_Pos   0
+#define VG_STROKE_FLAGS_LINE_JOIN_Msk   (0x03u << VG_STROKE_FLAGS_LINE_JOIN_Pos)
+#define VG_STROKE_FLAGS_LINE_CAP_Pos    2
+#define VG_STROKE_FLAGS_LINE_CAP_Msk    (0x03u << VG_STROKE_FLAGS_LINE_CAP_Pos)
+#define VG_STROKE_FLAGS_AA_Pos          4
+#define VG_STROKE_FLAGS_AA_Msk          (0x01u << VG_STROKE_FLAGS_AA_Pos)
+#define VG_STROKE_FLAGS_FIXED_WIDTH_Pos 5
+#define VG_STROKE_FLAGS_FIXED_WIDTH_Msk (0x01u << VG_STROKE_FLAGS_FIXED_WIDTH_Pos)
+#define VG_STROKE_FLAGS(cap, join, aa) (0 \
+	| (((uint32_t)(join) << VG_STROKE_FLAGS_LINE_JOIN_Pos) & VG_STROKE_FLAGS_LINE_JOIN_Msk) \
+	| (((uint32_t)(cap) << VG_STROKE_FLAGS_LINE_CAP_Pos) & VG_STROKE_FLAGS_LINE_CAP_Msk) \
+	| (((uint32_t)(aa) << VG_STROKE_FLAGS_AA_Pos) & VG_STROKE_FLAGS_AA_Msk) \
+)
+
+#define VG_FILL_FLAGS_PATH_TYPE_Pos 0
+#define VG_FILL_FLAGS_PATH_TYPE_Msk (0x01u << VG_FILL_FLAGS_PATH_TYPE_Pos)
+#define VG_FILL_FLAGS_FILL_RULE_Pos 1
+#define VG_FILL_FLAGS_FILL_RULE_Msk (0x01u << VG_FILL_FLAGS_FILL_RULE_Pos)
+#define VG_FILL_FLAGS_AA_Pos        2
+#define VG_FILL_FLAGS_AA_Msk        (0x01u << VG_FILL_FLAGS_AA_Pos)
+#define VG_FILL_FLAGS(type, rule, aa) (0 \
+	| (((uint32_t)(type) << VG_FILL_FLAGS_PATH_TYPE_Pos) & VG_FILL_FLAGS_PATH_TYPE_Msk) \
+	| (((uint32_t)(rule) << VG_FILL_FLAGS_FILL_RULE_Pos) & VG_FILL_FLAGS_FILL_RULE_Msk) \
+	| (((uint32_t)(aa) << VG_FILL_FLAGS_AA_Pos) & VG_FILL_FLAGS_AA_Msk) \
+)
 
 #define VG_HANDLE(_name) struct _name { uint16_t idx; }
 #define VG_HANDLE32(_name) struct _name { uint16_t idx; uint16_t flags; }

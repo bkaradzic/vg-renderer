@@ -9,8 +9,9 @@
 // be useful if the same command list is used both inside and outside a beginClip()/endClip()
 // block)
 #include <vg/vg.h>
-#include <vg/path.h>
-#include <vg/stroker.h>
+#include "config.h"
+#include "path.h"
+#include "stroker.h"
 #include "vg_util.h"
 #include "font_system.h"
 #include <bx/allocator.h>
@@ -4847,7 +4848,3 @@ static void releaseIndexBufferCallback(void* ptr, void* userData)
 	releaseIndexBuffer(ctx, (uint16_t*)ptr);
 }
 } // namespace vg
-
-#include <bgfx/c99/bgfx.h>
-#include <vg/c99/vg.h>
-#include "vg.c.inl"

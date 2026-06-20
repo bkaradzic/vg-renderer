@@ -1,4 +1,5 @@
-#include <vg/stroker.h>
+#include "stroker.h"
+#include "config.h"
 #include "vg_util.h"
 #include <tesselator.h>
 #include <bx/allocator.h>
