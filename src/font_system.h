@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <vg/vg.h>
+#include "config.h"
 
 namespace bx
 {

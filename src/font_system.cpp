@@ -3,6 +3,7 @@
 
 // TODO: bx::HandleAlloc for fonts so we are able to remove fonts and keep the same handles
 #include "font_system.h"
+#include "config.h"
 #include "vg_util.h"
 #include <bx/allocator.h>
 #include <bx/string.h>

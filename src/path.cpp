@@ -1,4 +1,5 @@
-#include <vg/path.h>
+#include "path.h"
+#include "config.h"
 #include <bx/allocator.h>
 
 namespace vg
