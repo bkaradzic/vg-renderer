@@ -332,6 +332,7 @@ struct CommandListFlags
 		None                = 0,
 		Cacheable           = 1 << 0, // Cache the generated geometry in order to avoid retesselation every frame; uses extra memory
 		AllowCommandCulling = 1 << 1, // If the scissor rect ends up being zero-sized, don't execute fill/stroke commands.
+		CacheScaleInvariant = 1 << 2, // Build the cache once and reuse it at any scale, skipping the per-scale retesselation.
 	};
 };
 

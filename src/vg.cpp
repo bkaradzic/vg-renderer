@@ -3418,7 +3418,11 @@ static void ctxSubmitCommandList(Context* ctx, CommandListHandle handle)
 
 		const float cachedScale = clCache->m_AvgScale;
 		const float stateScale = state->m_AvgScale;
-		if (cachedScale == stateScale) {
+
+		const bool scaleInvariant = 0 != (cl->m_Flags & CommandListFlags::CacheScaleInvariant);
+		const bool reuse = scaleInvariant ? (cachedScale != 0.0f) : (cachedScale == stateScale);
+
+		if (reuse) {
 			clCacheRender(ctx, cl);
 			--ctx->m_SubmitCmdListRecursionDepth;
 			return;
