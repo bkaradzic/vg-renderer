@@ -251,12 +251,17 @@ struct CachedCommand
 	float m_InvTransformMtx[6];
 };
 
+static constexpr uint32_t kMeshGrowth    = 256;
+static constexpr uint32_t kCommandGrowth = 256;
+
 struct CommandListCache
 {
 	CachedMesh* m_Meshes;
 	uint32_t m_NumMeshes;
+	uint32_t m_MaxMeshes;
 	CachedCommand* m_Commands;
 	uint32_t m_NumCommands;
+	uint32_t m_MaxCommands;
 	float m_AvgScale;
 };
 
@@ -4382,7 +4387,12 @@ static void beginCachedCommand(Context* ctx)
 	bx::AllocatorI* allocator = ctx->m_Allocator;
 
 	cache->m_NumCommands++;
-	cache->m_Commands = (CachedCommand*)bx::realloc(allocator, cache->m_Commands, sizeof(CachedCommand) * cache->m_NumCommands);
+	if (cache->m_NumCommands > cache->m_MaxCommands)
+	{
+		cache->m_MaxCommands += kCommandGrowth;
+		cache->m_Commands = (CachedCommand*)bx::realloc(allocator, cache->m_Commands, sizeof(CachedCommand) * cache->m_MaxCommands);
+	}
+
 
 	CachedCommand* lastCmd = &cache->m_Commands[cache->m_NumCommands - 1];
 	lastCmd->m_FirstMeshID = (uint16_t)cache->m_NumMeshes;
@@ -4412,7 +4422,11 @@ static void addCachedCommand(Context* ctx, const float* pos, uint32_t numVertice
 	bx::AllocatorI* allocator = ctx->m_Allocator;
 
 	cache->m_NumMeshes++;
-	cache->m_Meshes = (CachedMesh*)bx::realloc(allocator, cache->m_Meshes, sizeof(CachedMesh) * cache->m_NumMeshes);
+	if (cache->m_NumMeshes > cache->m_MaxMeshes)
+	{
+		cache->m_MaxMeshes += kMeshGrowth;
+		cache->m_Meshes = (CachedMesh*)bx::realloc(allocator, cache->m_Meshes, sizeof(CachedMesh) * cache->m_MaxMeshes);
+	}
 
 	CachedMesh* mesh = &cache->m_Meshes[cache->m_NumMeshes - 1];
 
