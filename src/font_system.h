@@ -12,6 +12,8 @@ struct AllocatorI;
 
 namespace vg
 {
+struct Context; // implementation type, defined in vg.cpp
+
 struct FontSystemFlags
 {
 	enum Enum : uint32_t

@@ -184,7 +184,7 @@ FontSystem* fsCreate(vg::Context* ctx, bx::AllocatorI* allocator, const FontSyst
 		fs->m_FontImages[i] = VG_INVALID_HANDLE;
 	}
 
-	fs->m_FontImages[0] = createImage(ctx, (uint16_t)cfg->m_AtlasWidth, (uint16_t)cfg->m_AtlasHeight, cfg->m_FontAtlasImageFlags, nullptr);
+	fs->m_FontImages[0] = createImage((uint16_t)cfg->m_AtlasWidth, (uint16_t)cfg->m_AtlasHeight, cfg->m_FontAtlasImageFlags, nullptr);
 	VG_CHECK(isValid(fs->m_FontImages[0]), "Failed to initialize font texture");
 
 	fs->m_FontImageID = 0;
@@ -202,7 +202,7 @@ void fsDestroy(FontSystem* fs, vg::Context* ctx)
 	fsTextBufferShutdown(&fs->m_TextBuffer, allocator);
 
 	for (uint32_t i = 0; i < FS_CONFIG_MAX_FONT_IMAGES; ++i) {
-		destroyImage(ctx, fs->m_FontImages[i]);
+		destroyImage(fs->m_FontImages[i]);
 	}
 
 	const uint32_t numFonts = fs->m_NumFonts;
@@ -233,16 +233,16 @@ void fsFrame(FontSystem* fs, vg::Context* ctx)
 		// delete images that smaller than current one
 		if (vg::isValid(fontImage)) {
 			uint16_t iw, ih;
-			vg::getImageSize(ctx, fontImage, &iw, &ih);
+			vg::getImageSize(fontImage, &iw, &ih);
 
 			uint32_t j = 0;
 			for (uint32_t i = 0; i < fs->m_FontImageID; i++) {
 				if (vg::isValid(fs->m_FontImages[i])) {
 					uint16_t nw, nh;
-					vg::getImageSize(ctx, fs->m_FontImages[i], &nw, &nh);
+					vg::getImageSize(fs->m_FontImages[i], &nw, &nh);
 
 					if (nw < iw || nh < ih) {
-						vg::destroyImage(ctx, fs->m_FontImages[i]);
+						vg::destroyImage(fs->m_FontImages[i]);
 					} else {
 						fs->m_FontImages[j++] = fs->m_FontImages[i];
 					}
@@ -393,14 +393,14 @@ void fsFlushFontAtlasImage(FontSystem* fs, vg::Context* ctx)
 	uint32_t* rgbaData = (uint32_t*)bx::alloc(fs->m_Allocator, sizeof(uint32_t) * imgSize[0] * imgSize[1]);
 	vgutil::convertA8_to_RGBA8(rgbaData, a8Data, (uint32_t)imgSize[0], (uint32_t)imgSize[1], 0x00FFFFFF);
 
-	vg::updateImage(ctx, fontImage, dirtyRect[0], dirtyRect[1], dirtyRect[2] - dirtyRect[0], dirtyRect[3] - dirtyRect[1], (const uint8_t*)rgbaData);
+	vg::updateImage(fontImage, dirtyRect[0], dirtyRect[1], dirtyRect[2] - dirtyRect[0], dirtyRect[3] - dirtyRect[1], (const uint8_t*)rgbaData);
 
 	bx::free(fs->m_Allocator, rgbaData);
 }
 
 uint32_t fsText(FontSystem* fs, vg::Context* ctx, const vg::TextConfig& cfg, const char* str, uint32_t len, uint32_t flags, TextMesh* mesh)
 {
-	VG_CHECK(vg::isValid(cfg.m_FontHandle), "Invalid font handle");
+	VG_CHECK(vg::isValid(cfg.fontHandle), "Invalid font handle");
 
 	bx::memSet(mesh, 0, sizeof(TextMesh));
 
@@ -408,7 +408,7 @@ uint32_t fsText(FontSystem* fs, vg::Context* ctx, const vg::TextConfig& cfg, con
 		return 0;
 	}
 
-	const int16_t isize = (int16_t)(cfg.m_FontSize * 10.0f);
+	const int16_t isize = (int16_t)(cfg.fontSize * 10.0f);
 	if (isize < 2) {
 		return 0; // Font size too small. Don't render anything.
 	}
@@ -442,7 +442,7 @@ uint32_t fsText(FontSystem* fs, vg::Context* ctx, const vg::TextConfig& cfg, con
 
 static uint32_t fsTextBuildMesh(FontSystem* fs, TextBuffer* tb, vg::Context* ctx, const vg::TextConfig& cfg, uint32_t flags, TextMesh* mesh)
 {
-	const int16_t isize = (int16_t)(cfg.m_FontSize * 10.0f);
+	const int16_t isize = (int16_t)(cfg.fontSize * 10.0f);
 
 	// Check if there are actually any codepoints. This can happen if the input string contains an incomplete utf8 character (?).
 	const uint32_t numCodepoints = tb->m_Size;
@@ -452,7 +452,7 @@ static uint32_t fsTextBuildMesh(FontSystem* fs, TextBuffer* tb, vg::Context* ctx
 
 	// Find glyph indices for each codepoint
 	{
-		const vg::FontHandle fontHandle = cfg.m_FontHandle;
+		const vg::FontHandle fontHandle = cfg.fontHandle;
 		Font* font = &fs->m_Fonts[fontHandle.idx];
 		for (uint32_t i = 0; i < numCodepoints; ++i) {
 			// Replace tabs with spaces. The same check is done below when deciding the width of the glyph.
@@ -507,12 +507,12 @@ static uint32_t fsTextBuildMesh(FontSystem* fs, TextBuffer* tb, vg::Context* ctx
 	float minx = 0.0f, maxx = 0.0f;
 	float miny = 0.0f, maxy = 0.0f;
 	{
-		const Font* font = &fs->m_Fonts[cfg.m_FontHandle.idx];
+		const Font* font = &fs->m_Fonts[cfg.fontHandle.idx];
 		const bool originTopLeft = (fs->m_Config.m_Flags & FontSystemFlags::Origin_Msk) == FontSystemFlags::Origin_TopLeft;
 		const float y_mult = originTopLeft ? 1.0f : -1.0f;
 		const uint32_t bboxMinYID = originTopLeft ? 1 : 3;
 		const uint32_t bboxMaxYID = originTopLeft ? 3 : 1;
-		const int16_t iblur = (int16_t)bx::clamp<float>(cfg.m_Blur, 0.0f, 20.0f);
+		const int16_t iblur = (int16_t)bx::clamp<float>(cfg.blur, 0.0f, 20.0f);
 #if VG_CONFIG_UV_INT16
 		const float x_to_u = (float)INT16_MAX / (float)fs->m_Atlas->m_Width;
 		const float y_to_v = (float)INT16_MAX / (float)fs->m_Atlas->m_Height;
@@ -521,7 +521,7 @@ static uint32_t fsTextBuildMesh(FontSystem* fs, TextBuffer* tb, vg::Context* ctx
 		const float y_to_v = 1.0f / (float)fs->m_Atlas->m_Height;
 #endif
 		const float scale = fsBackendGetPixelHeightScale(font->m_BackendData, (float)isize / 10.0f);
-		const float spacing = cfg.m_Spacing;
+		const float spacing = cfg.spacing;
 
 		const bool bitmapsOptional = (flags & TextFlags::BuildBitmaps) == 0;
 
@@ -568,9 +568,9 @@ static uint32_t fsTextBuildMesh(FontSystem* fs, TextBuffer* tb, vg::Context* ctx
 				q->m_Pos[2] = rx + (atlasMaxX - atlasMinX) * width_mult;
 				q->m_Pos[3] = ry + (atlasMaxY - atlasMinY) * y_mult;
 
-				if (glyphFont.idx != cfg.m_FontHandle.idx) {
+				if (glyphFont.idx != cfg.fontHandle.idx) {
 					const Font* fallbackFont = &fs->m_Fonts[glyphFont.idx];
-					const float deltaY = (fallbackFont->m_Descender - font->m_Descender) * cfg.m_FontSize * y_mult;
+					const float deltaY = (fallbackFont->m_Descender - font->m_Descender) * cfg.fontSize * y_mult;
 					q->m_Pos[1] += deltaY;
 					q->m_Pos[3] += deltaY;
 				}
@@ -596,7 +596,7 @@ static uint32_t fsTextBuildMesh(FontSystem* fs, TextBuffer* tb, vg::Context* ctx
 
 	float dx = 0.0f;
 	const float width = cursorX;
-	switch ((cfg.m_Alignment & VG_TEXT_ALIGN_HOR_Msk) >> VG_TEXT_ALIGN_HOR_Pos) {
+	switch ((cfg.alignment & VG_TEXT_ALIGN_HOR_Msk) >> VG_TEXT_ALIGN_HOR_Pos) {
 	case vg::TextAlignHor::Left:
 		break;
 	case vg::TextAlignHor::Center:
@@ -611,13 +611,13 @@ static uint32_t fsTextBuildMesh(FontSystem* fs, TextBuffer* tb, vg::Context* ctx
 		break;
 	}
 
-	const float dy = fsGetVertAlign(fs, &fs->m_Fonts[cfg.m_FontHandle.idx], cfg.m_Alignment, isize);
+	const float dy = fsGetVertAlign(fs, &fs->m_Fonts[cfg.fontHandle.idx], cfg.alignment, isize);
 
 	mesh->m_Alignment[0] = dx;
 	mesh->m_Alignment[1] = dy;
 	mesh->m_Bounds[0] = minx;
 	mesh->m_Bounds[1] = miny;
-	mesh->m_Bounds[2] = maxx + cfg.m_Spacing; // Make sure the bounding box includes the specified spacing at the end.
+	mesh->m_Bounds[2] = maxx + cfg.spacing; // Make sure the bounding box includes the specified spacing at the end.
 	mesh->m_Bounds[3] = maxy;
 	mesh->m_Quads = tb->m_Quads;
 	mesh->m_Codepoints = tb->m_Codepoints;
@@ -630,8 +630,8 @@ static uint32_t fsTextBuildMesh(FontSystem* fs, TextBuffer* tb, vg::Context* ctx
 
 float fsGetLineHeight(FontSystem* fs, const vg::TextConfig& cfg)
 {
-	const Font* font = &fs->m_Fonts[cfg.m_FontHandle.idx];
-	return font->m_LineHeight * (float)((int32_t)(cfg.m_FontSize * 10.0f)) / 10.0f;
+	const Font* font = &fs->m_Fonts[cfg.fontHandle.idx];
+	return font->m_LineHeight * (float)((int32_t)(cfg.fontSize * 10.0f)) / 10.0f;
 }
 
 static uint32_t decodeCodepoint(const char** str, const char* end)
@@ -841,10 +841,10 @@ uint32_t fsTextBreakLines(FontSystem* fs, const vg::TextConfig& cfg, const char*
 
 void fsLineBounds(FontSystem* fs, const vg::TextConfig& cfg, float y, float* miny, float* maxy)
 {
-	const Font* font = &fs->m_Fonts[cfg.m_FontHandle.idx];
-	short isize = (short)(cfg.m_FontSize * 10.0f);
+	const Font* font = &fs->m_Fonts[cfg.fontHandle.idx];
+	short isize = (short)(cfg.fontSize * 10.0f);
 
-	y += fsGetVertAlign(fs, font, cfg.m_Alignment, isize);
+	y += fsGetVertAlign(fs, font, cfg.alignment, isize);
 
 	if ((fs->m_Config.m_Flags & FontSystemFlags::Origin_Msk) == FontSystemFlags::Origin_TopLeft) {
 		*miny = y - font->m_Ascender * (float)isize / 10.0f;
@@ -932,10 +932,10 @@ static bool fsAllocTextAtlas(FontSystem* fs, Context* ctx)
 	// if next fontImage already have a texture
 	uint16_t iw, ih;
 	if (vg::isValid(fs->m_FontImages[fs->m_FontImageID + 1])) {
-		vg::getImageSize(ctx, fs->m_FontImages[fs->m_FontImageID + 1], &iw, &ih);
+		vg::getImageSize(fs->m_FontImages[fs->m_FontImageID + 1], &iw, &ih);
 	} else {
 		// calculate the new font image size and create it.
-		const bool imgSizeValid = vg::getImageSize(ctx, fs->m_FontImages[fs->m_FontImageID], &iw, &ih);
+		const bool imgSizeValid = vg::getImageSize(fs->m_FontImages[fs->m_FontImageID], &iw, &ih);
 		VG_CHECK(imgSizeValid, "Invalid font atlas dimensions");
 		BX_UNUSED(imgSizeValid);
 
@@ -950,7 +950,7 @@ static bool fsAllocTextAtlas(FontSystem* fs, Context* ctx)
 			iw = ih = (uint16_t)maxTextureSize;
 		}
 
-		fs->m_FontImages[fs->m_FontImageID + 1] = vg::createImage(ctx, iw, ih, fs->m_Config.m_FontAtlasImageFlags, nullptr);
+		fs->m_FontImages[fs->m_FontImageID + 1] = vg::createImage(iw, ih, fs->m_Config.m_FontAtlasImageFlags, nullptr);
 	}
 
 	++fs->m_FontImageID;
@@ -1253,7 +1253,7 @@ static uint32_t decodeUTF8(uint32_t* state, uint32_t* codep, uint8_t byte)
 static void fsUpdateWhitePixelUV(FontSystem* fs, vg::Context* ctx)
 {
 	uint16_t w, h;
-	getImageSize(ctx, fs->m_FontImages[fs->m_FontImageID], &w, &h);
+	getImageSize(fs->m_FontImages[fs->m_FontImageID], &w, &h);
 
 #if VG_CONFIG_UV_INT16
 	fs->m_FontImageWhitePixelUV[0] = INT16_MAX / (int16_t)w;
