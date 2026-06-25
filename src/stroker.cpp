@@ -271,11 +271,11 @@ void strokerConvexFill(Stroker* stroker, Mesh* mesh, const float* vertexList, ui
 		stroker->m_NumIndices += numIndices;
 	}
 
-	mesh->m_PosBuffer = vertexList;
-	mesh->m_ColorBuffer = nullptr;
-	mesh->m_IndexBuffer = stroker->m_IndexBuffer;
-	mesh->m_NumVertices = numVertices;
-	mesh->m_NumIndices = stroker->m_NumIndices;
+	mesh->posBuffer = vertexList;
+	mesh->colorBuffer = nullptr;
+	mesh->indexBuffer = stroker->m_IndexBuffer;
+	mesh->numVertices = numVertices;
+	mesh->numIndices = stroker->m_NumIndices;
 }
 
 #if VG_CONFIG_ENABLE_SIMD
@@ -639,11 +639,11 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 		stroker->m_NumIndices += numDrawIndices;
 	}
 
-	mesh->m_PosBuffer = &stroker->m_PosBuffer[0].x;
-	mesh->m_ColorBuffer = stroker->m_ColorBuffer;
-	mesh->m_IndexBuffer = stroker->m_IndexBuffer;
-	mesh->m_NumVertices = stroker->m_NumVertices;
-	mesh->m_NumIndices = stroker->m_NumIndices;
+	mesh->posBuffer = &stroker->m_PosBuffer[0].x;
+	mesh->colorBuffer = stroker->m_ColorBuffer;
+	mesh->indexBuffer = stroker->m_IndexBuffer;
+	mesh->numVertices = stroker->m_NumVertices;
+	mesh->numIndices = stroker->m_NumIndices;
 }
 #else
 void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, uint32_t numVertices, uint32_t color)
@@ -734,11 +734,11 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 		stroker->m_NumIndices += numDrawIndices;
 	}
 
-	mesh->m_PosBuffer = &stroker->m_PosBuffer[0].x;
-	mesh->m_ColorBuffer = stroker->m_ColorBuffer;
-	mesh->m_IndexBuffer = stroker->m_IndexBuffer;
-	mesh->m_NumVertices = stroker->m_NumVertices;
-	mesh->m_NumIndices = stroker->m_NumIndices;
+	mesh->posBuffer = &stroker->m_PosBuffer[0].x;
+	mesh->colorBuffer = stroker->m_ColorBuffer;
+	mesh->indexBuffer = stroker->m_IndexBuffer;
+	mesh->numVertices = stroker->m_NumVertices;
+	mesh->numIndices = stroker->m_NumIndices;
 }
 #endif
 
@@ -791,11 +791,11 @@ bool strokerConcaveFillEnd(Stroker* stroker, Mesh* mesh, FillRule::Enum fillRule
 		return false;
 	}
 
-	mesh->m_PosBuffer = tessGetVertices(stroker->m_Tesselator);
-	mesh->m_ColorBuffer = nullptr;
-	mesh->m_IndexBuffer = tessGetElements(stroker->m_Tesselator);
-	mesh->m_NumVertices = (uint32_t)tessGetVertexCount(stroker->m_Tesselator);
-	mesh->m_NumIndices = (uint32_t)tessGetElementCount(stroker->m_Tesselator) * 3;
+	mesh->posBuffer = tessGetVertices(stroker->m_Tesselator);
+	mesh->colorBuffer = nullptr;
+	mesh->indexBuffer = tessGetElements(stroker->m_Tesselator);
+	mesh->numVertices = (uint32_t)tessGetVertexCount(stroker->m_Tesselator);
+	mesh->numIndices = (uint32_t)tessGetElementCount(stroker->m_Tesselator) * 3;
 
 	return true;
 }
@@ -929,11 +929,11 @@ bool strokerConcaveFillEndAA(Stroker* stroker, Mesh* mesh, uint32_t color, FillR
 		stroker->m_NumIndices += numTessIndices;
 	}
 
-	mesh->m_PosBuffer = &stroker->m_PosBuffer[0].x;
-	mesh->m_ColorBuffer = stroker->m_ColorBuffer;
-	mesh->m_IndexBuffer = stroker->m_IndexBuffer;
-	mesh->m_NumVertices = stroker->m_NumVertices;
-	mesh->m_NumIndices = stroker->m_NumIndices;
+	mesh->posBuffer = &stroker->m_PosBuffer[0].x;
+	mesh->colorBuffer = stroker->m_ColorBuffer;
+	mesh->indexBuffer = stroker->m_IndexBuffer;
+	mesh->numVertices = stroker->m_NumVertices;
+	mesh->numIndices = stroker->m_NumIndices;
 
 	return true;
 }
@@ -1315,11 +1315,11 @@ void polylineStroke(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numP
 		addIndices<6>(stroker, &id[0]);
 	}
 
-	mesh->m_PosBuffer = &stroker->m_PosBuffer[0].x;
-	mesh->m_ColorBuffer = nullptr;
-	mesh->m_IndexBuffer = stroker->m_IndexBuffer;
-	mesh->m_NumVertices = stroker->m_NumVertices;
-	mesh->m_NumIndices = stroker->m_NumIndices;
+	mesh->posBuffer = &stroker->m_PosBuffer[0].x;
+	mesh->colorBuffer = nullptr;
+	mesh->indexBuffer = stroker->m_IndexBuffer;
+	mesh->numVertices = stroker->m_NumVertices;
+	mesh->numIndices = stroker->m_NumIndices;
 }
 
 void polylineStrokeAA(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numPathVertices, float strokeWidth, Color color, bool isClosed, LineCap::Enum lineCap, LineJoin::Enum lineJoin)
@@ -1917,11 +1917,11 @@ void polylineStrokeAA(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t nu
 		addIndices<18>(stroker, &id[0]);
 	}
 
-	mesh->m_PosBuffer = &stroker->m_PosBuffer[0].x;
-	mesh->m_ColorBuffer = stroker->m_ColorBuffer;
-	mesh->m_IndexBuffer = stroker->m_IndexBuffer;
-	mesh->m_NumVertices = stroker->m_NumVertices;
-	mesh->m_NumIndices = stroker->m_NumIndices;
+	mesh->posBuffer = &stroker->m_PosBuffer[0].x;
+	mesh->colorBuffer = stroker->m_ColorBuffer;
+	mesh->indexBuffer = stroker->m_IndexBuffer;
+	mesh->numVertices = stroker->m_NumVertices;
+	mesh->numIndices = stroker->m_NumIndices;
 }
 
 void polylineStrokeAAThin(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numPathVertices, Color color, bool closed, LineCap::Enum lineCap, LineJoin::Enum lineJoin)
@@ -2240,11 +2240,11 @@ void polylineStrokeAAThin(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_
 		addIndices<12>(stroker, id);
 	}
 
-	mesh->m_PosBuffer = &stroker->m_PosBuffer[0].x;
-	mesh->m_ColorBuffer = stroker->m_ColorBuffer;
-	mesh->m_IndexBuffer = stroker->m_IndexBuffer;
-	mesh->m_NumVertices = stroker->m_NumVertices;
-	mesh->m_NumIndices = stroker->m_NumIndices;
+	mesh->posBuffer = &stroker->m_PosBuffer[0].x;
+	mesh->colorBuffer = stroker->m_ColorBuffer;
+	mesh->indexBuffer = stroker->m_IndexBuffer;
+	mesh->numVertices = stroker->m_NumVertices;
+	mesh->numIndices = stroker->m_NumIndices;
 }
 
 inline static void resetGeometry(Stroker* stroker)

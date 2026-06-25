@@ -284,7 +284,7 @@ struct CommandList
 
 struct Context
 {
-	ContextConfig m_Config;
+	Init m_Config;
 	Stats m_Stats;
 	bx::AllocatorI* m_Allocator;
 	uint16_t m_ViewID;
@@ -486,43 +486,45 @@ inline bool isLocal(ImagePatternHandle handle) { return isLocal(handle.flags); }
 //////////////////////////////////////////////////////////////////////////
 // Public interface
 //
-Context* createContext(bx::AllocatorI* allocator, const ContextConfig* userCfg)
+static Context* s_ctx = nullptr;
+
+bool init(bx::AllocatorI* allocator, const Init* userCfg)
 {
-	static const ContextConfig defaultConfig = {
-		.m_MaxGradients            = 64,
-		.m_MaxImagePatterns        = 64,
-		.m_MaxFonts                = 8,
-		.m_MaxStateStackSize       = 32,
-		.m_MaxImages               = 16,
-		.m_MaxCommandLists         = 256,
-		.m_MaxVBVertices           = 65536,
-		.m_FontAtlasImageFlags     = ImageFlags::Filter_Bilinear,
-		.m_MaxCommandListDepth     = 16,
-		.m_ResetViewTransformOnEnd = true,
+	static const Init defaultConfig = {
+		.maxGradients            = 64,
+		.maxImagePatterns        = 64,
+		.maxFonts                = 8,
+		.maxStateStackSize       = 32,
+		.maxImages               = 16,
+		.maxCommandLists         = 256,
+		.maxVBVertices           = 65536,
+		.fontAtlasImageFlags     = ImageFlags::Filter_Bilinear,
+		.maxCommandListDepth     = 16,
+		.resetViewTransformOnEnd = true,
 	};
 
-	const ContextConfig* cfg = userCfg ? userCfg : &defaultConfig;
+	const Init* cfg = userCfg ? userCfg : &defaultConfig;
 
-	VG_CHECK(cfg->m_MaxVBVertices <= 65536, "Vertex buffers cannot be larger than 64k vertices because indices are always uint16");
+	VG_CHECK(cfg->maxVBVertices <= 65536, "Vertex buffers cannot be larger than 64k vertices because indices are always uint16");
 
 	const uint32_t alignment = 16;
 	const uint32_t totalMem = 0
 		+ alignSize(sizeof(Context), alignment)
-		+ alignSize(sizeof(Gradient) * cfg->m_MaxGradients, alignment)
-		+ alignSize(sizeof(ImagePattern) * cfg->m_MaxImagePatterns, alignment)
-		+ alignSize(sizeof(State) * cfg->m_MaxStateStackSize, alignment)
-		+ alignSize(sizeof(CommandList) * cfg->m_MaxCommandLists, alignment);
+		+ alignSize(sizeof(Gradient) * cfg->maxGradients, alignment)
+		+ alignSize(sizeof(ImagePattern) * cfg->maxImagePatterns, alignment)
+		+ alignSize(sizeof(State) * cfg->maxStateStackSize, alignment)
+		+ alignSize(sizeof(CommandList) * cfg->maxCommandLists, alignment);
 
 	uint8_t* mem = (uint8_t*)bx::alignedAlloc(allocator, totalMem, alignment);
 	bx::memSet(mem, 0, totalMem);
 
 	Context* ctx = (Context*)mem;              mem += alignSize(sizeof(Context), alignment);
-	ctx->m_Gradients = (Gradient*)mem;         mem += alignSize(sizeof(Gradient) * cfg->m_MaxGradients, alignment);
-	ctx->m_ImagePatterns = (ImagePattern*)mem; mem += alignSize(sizeof(ImagePattern) * cfg->m_MaxImagePatterns, alignment);
-	ctx->m_StateStack = (State*)mem;           mem += alignSize(sizeof(State) * cfg->m_MaxStateStackSize, alignment);
-	ctx->m_CmdLists = (CommandList*)mem;       mem += alignSize(sizeof(CommandList) * cfg->m_MaxCommandLists, alignment);
+	ctx->m_Gradients = (Gradient*)mem;         mem += alignSize(sizeof(Gradient) * cfg->maxGradients, alignment);
+	ctx->m_ImagePatterns = (ImagePattern*)mem; mem += alignSize(sizeof(ImagePattern) * cfg->maxImagePatterns, alignment);
+	ctx->m_StateStack = (State*)mem;           mem += alignSize(sizeof(State) * cfg->maxStateStackSize, alignment);
+	ctx->m_CmdLists = (CommandList*)mem;       mem += alignSize(sizeof(CommandList) * cfg->maxCommandLists, alignment);
 
-	bx::memCopy(&ctx->m_Config, cfg, sizeof(ContextConfig));
+	bx::memCopy(&ctx->m_Config, cfg, sizeof(Init));
 	ctx->m_Allocator = allocator;
 	ctx->m_ViewID = 0;
 	ctx->m_DevicePixelRatio = 1.0f;
@@ -530,16 +532,17 @@ Context* createContext(bx::AllocatorI* allocator, const ContextConfig* userCfg)
 	ctx->m_FringeWidth = 1.0f;
 	ctx->m_StateStackTop = 0;
 	ctx->m_StateStack[0].m_GlobalAlpha = 1.0f;
-	resetScissor(ctx);
-	transformIdentity(ctx);
+	s_ctx = ctx;
+	resetScissor();
+	transformIdentity();
 
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
 	ctx->m_CmdListCacheStackTop = ~0u;
 #endif
 
-	ctx->m_PosBufferPool = BX_NEW(allocator, vgutil::PoolAllocator)(sizeof(float) * 2 * ctx->m_Config.m_MaxVBVertices, 4, allocator);
-	ctx->m_ColorBufferPool = BX_NEW(allocator, vgutil::PoolAllocator)(sizeof(uint32_t) * ctx->m_Config.m_MaxVBVertices, 4, allocator);
-	ctx->m_UVBufferPool = BX_NEW(allocator, vgutil::PoolAllocator)(sizeof(uv_t) * 2 * ctx->m_Config.m_MaxVBVertices, 4, allocator);
+	ctx->m_PosBufferPool = BX_NEW(allocator, vgutil::PoolAllocator)(sizeof(float) * 2 * ctx->m_Config.maxVBVertices, 4, allocator);
+	ctx->m_ColorBufferPool = BX_NEW(allocator, vgutil::PoolAllocator)(sizeof(uint32_t) * ctx->m_Config.maxVBVertices, 4, allocator);
+	ctx->m_UVBufferPool = BX_NEW(allocator, vgutil::PoolAllocator)(sizeof(uv_t) * 2 * ctx->m_Config.maxVBVertices, 4, allocator);
 
 #if BX_CONFIG_SUPPORTS_THREADING
 	ctx->m_DataPoolMutex = BX_NEW(allocator, bx::Mutex)();
@@ -547,8 +550,8 @@ Context* createContext(bx::AllocatorI* allocator, const ContextConfig* userCfg)
 	ctx->m_Path = createPath(allocator);
 	ctx->m_Stroker = createStroker(allocator);
 
-	ctx->m_ImageHandleAlloc = bx::createHandleAlloc(allocator, cfg->m_MaxImages);
-	ctx->m_CmdListHandleAlloc = bx::createHandleAlloc(allocator, cfg->m_MaxCommandLists);
+	ctx->m_ImageHandleAlloc = bx::createHandleAlloc(allocator, cfg->maxImages);
+	ctx->m_CmdListHandleAlloc = bx::createHandleAlloc(allocator, cfg->maxCommandLists);
 
 	// bgfx setup
 	ctx->m_PosVertexDecl.begin().add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float).end();
@@ -603,19 +606,20 @@ Context* createContext(bx::AllocatorI* allocator, const ContextConfig* userCfg)
 		.m_WhiteRectHeight = (uint16_t)(caps->limits.maxTextureSize / VG_CONFIG_MIN_FONT_ATLAS_SIZE),
 		.m_MaxTextureSize = caps->limits.maxTextureSize,
 		.m_Flags = FontSystemFlags::Origin_TopLeft,
-		.m_FontAtlasImageFlags = cfg->m_FontAtlasImageFlags,
+		.m_FontAtlasImageFlags = cfg->fontAtlasImageFlags,
 	};
 	ctx->m_FontSystem = fsCreate(ctx, allocator, &fsCfg);
 	if (!ctx->m_FontSystem) {
-		destroyContext(ctx);
-		return nullptr;
+		shutdown();
+		return false;
 	}
 
-	return ctx;
+	return true;
 }
 
-void destroyContext(Context* ctx)
+void shutdown()
 {
+	Context* ctx = s_ctx;
 	bx::AllocatorI* allocator = ctx->m_Allocator;
 
 	for (uint32_t i = 0; i < DrawCommand::Type::NumTypes; ++i) {
@@ -734,10 +738,12 @@ void destroyContext(Context* ctx)
 #endif
 
 	bx::alignedFree(allocator, ctx, 16);
+	s_ctx = nullptr;
 }
 
-void begin(Context* ctx, uint16_t viewID, uint16_t canvasWidth, uint16_t canvasHeight, float devicePixelRatio)
+void begin(uint16_t viewID, uint16_t canvasWidth, uint16_t canvasHeight, float devicePixelRatio)
 {
+	Context* ctx = s_ctx;
 	ctx->m_ViewID = viewID;
 	ctx->m_CanvasWidth = canvasWidth;
 	ctx->m_CanvasHeight = canvasHeight;
@@ -751,8 +757,8 @@ void begin(Context* ctx, uint16_t viewID, uint16_t canvasWidth, uint16_t canvasH
 #endif
 
 	VG_CHECK(ctx->m_StateStackTop == 0, "State stack hasn't been properly reset in the previous frame");
-	resetScissor(ctx);
-	transformIdentity(ctx);
+	resetScissor();
+	transformIdentity();
 
 	ctx->m_FirstVertexBufferID = ctx->m_NumVertexBuffers;
 	allocVertexBuffer(ctx);
@@ -773,8 +779,9 @@ void begin(Context* ctx, uint16_t viewID, uint16_t canvasWidth, uint16_t canvasH
 	ctx->m_NextImagePatternID = 0;
 }
 
-void end(Context* ctx)
+void end()
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(ctx->m_StateStackTop == 0, "pushState()/popState() mismatch");
 	VG_CHECK(!isValid(ctx->m_ActiveCommandList), "endCommandList() hasn't been called");
 
@@ -798,7 +805,7 @@ void end(Context* ctx)
 		VertexBuffer* vb = &ctx->m_VertexBuffers[iVB];
 		GPUVertexBuffer* gpuvb = &ctx->m_GPUVertexBuffers[iVB];
 
-		const uint32_t maxVBVertices = ctx->m_Config.m_MaxVBVertices;
+		const uint32_t maxVBVertices = ctx->m_Config.maxVBVertices;
 		if (!bgfx::isValid(gpuvb->m_PosBufferHandle)) {
 			gpuvb->m_PosBufferHandle = bgfx::createDynamicVertexBuffer(maxVBVertices, ctx->m_PosVertexDecl, 0);
 		}
@@ -837,7 +844,7 @@ void end(Context* ctx)
 	const uint16_t canvasHeight = ctx->m_CanvasHeight;
 	const float devicePixelRatio = ctx->m_DevicePixelRatio;
 
-	if (ctx->m_Config.m_ResetViewTransformOnEnd) {
+	if (ctx->m_Config.resetViewTransformOnEnd) {
 		float viewMtx[16];
 		float projMtx[16];
 		bx::mtxIdentity(viewMtx);
@@ -983,263 +990,314 @@ void end(Context* ctx)
 	}
 }
 
-void frame(Context* ctx)
+void frame()
 {
+	Context* ctx = s_ctx;
 	ctx->m_NumVertexBuffers = 0;
 
 	fsFrame(ctx->m_FontSystem, ctx);
 }
 
-const Stats* getStats(Context* ctx)
+const Stats* getStats()
 {
+	Context* ctx = s_ctx;
 	return &ctx->m_Stats;
 }
 
-void beginPath(Context* ctx)
+void beginPath()
 {
+	Context* ctx = s_ctx;
 	ctxBeginPath(ctx);
 }
 
-void moveTo(Context* ctx, float x, float y)
+void moveTo(float x, float y)
 {
+	Context* ctx = s_ctx;
 	ctxMoveTo(ctx, x, y);
 }
 
-void lineTo(Context* ctx, float x, float y)
+void lineTo(float x, float y)
 {
+	Context* ctx = s_ctx;
 	ctxLineTo(ctx, x, y);
 }
 
-void cubicTo(Context* ctx, float c1x, float c1y, float c2x, float c2y, float x, float y)
+void cubicTo(float c1x, float c1y, float c2x, float c2y, float x, float y)
 {
+	Context* ctx = s_ctx;
 	ctxCubicTo(ctx, c1x, c1y, c2x, c2y, x, y);
 }
 
-void quadraticTo(Context* ctx, float cx, float cy, float x, float y)
+void quadraticTo(float cx, float cy, float x, float y)
 {
+	Context* ctx = s_ctx;
 	ctxQuadraticTo(ctx, cx, cy, x, y);
 }
 
-void arc(Context* ctx, float cx, float cy, float r, float a0, float a1, Winding::Enum dir)
+void arc(float cx, float cy, float r, float a0, float a1, Winding::Enum dir)
 {
+	Context* ctx = s_ctx;
 	ctxArc(ctx, cx, cy, r, a0, a1, dir);
 }
 
-void arcTo(Context* ctx, float x1, float y1, float x2, float y2, float r)
+void arcTo(float x1, float y1, float x2, float y2, float r)
 {
+	Context* ctx = s_ctx;
 	ctxArcTo(ctx, x1, y1, x2, y2, r);
 }
 
-void rect(Context* ctx, float x, float y, float w, float h)
+void rect(float x, float y, float w, float h)
 {
+	Context* ctx = s_ctx;
 	ctxRect(ctx, x, y, w, h);
 }
 
-void roundedRect(Context* ctx, float x, float y, float w, float h, float r)
+void roundedRect(float x, float y, float w, float h, float r)
 {
+	Context* ctx = s_ctx;
 	ctxRoundedRect(ctx, x, y, w, h, r);
 }
 
-void roundedRectVarying(Context* ctx, float x, float y, float w, float h, float rtl, float rtr, float rbr, float rbl)
+void roundedRectVarying(float x, float y, float w, float h, float rtl, float rtr, float rbr, float rbl)
 {
+	Context* ctx = s_ctx;
 	ctxRoundedRectVarying(ctx, x, y, w, h, rtl, rtr, rbr, rbl);
 }
 
-void circle(Context* ctx, float cx, float cy, float radius)
+void circle(float cx, float cy, float radius)
 {
+	Context* ctx = s_ctx;
 	ctxCircle(ctx, cx, cy, radius);
 }
 
-void ellipse(Context* ctx, float cx, float cy, float rx, float ry)
+void ellipse(float cx, float cy, float rx, float ry)
 {
+	Context* ctx = s_ctx;
 	ctxEllipse(ctx, cx, cy, rx, ry);
 }
 
-void polyline(Context* ctx, const float* coords, uint32_t numPoints)
+void polyline(const float* coords, uint32_t numPoints)
 {
+	Context* ctx = s_ctx;
 	ctxPolyline(ctx, coords, numPoints);
 }
 
-void closePath(Context* ctx)
+void closePath()
 {
+	Context* ctx = s_ctx;
 	ctxClosePath(ctx);
 }
 
-void fillPath(Context* ctx, Color color, uint32_t flags)
+void fillPath(Color color, uint32_t flags)
 {
+	Context* ctx = s_ctx;
 	ctxFillPathColor(ctx, color, flags);
 }
 
-void fillPath(Context* ctx, GradientHandle gradientHandle, uint32_t flags)
+void fillPath(GradientHandle gradientHandle, uint32_t flags)
 {
+	Context* ctx = s_ctx;
 	ctxFillPathGradient(ctx, gradientHandle, flags);
 }
 
-void fillPath(Context* ctx, ImagePatternHandle imgPatternHandle, Color color, uint32_t flags)
+void fillPath(ImagePatternHandle imgPatternHandle, Color color, uint32_t flags)
 {
+	Context* ctx = s_ctx;
 	ctxFillPathImagePattern(ctx, imgPatternHandle, color, flags);
 }
 
-void strokePath(Context* ctx, Color color, float width, uint32_t flags)
+void strokePath(Color color, float width, uint32_t flags)
 {
+	Context* ctx = s_ctx;
 	ctxStrokePathColor(ctx, color, width, flags);
 }
 
-void strokePath(Context* ctx, GradientHandle gradientHandle, float width, uint32_t flags)
+void strokePath(GradientHandle gradientHandle, float width, uint32_t flags)
 {
+	Context* ctx = s_ctx;
 	ctxStrokePathGradient(ctx, gradientHandle, width, flags);
 }
 
-void strokePath(Context* ctx, ImagePatternHandle imgPatternHandle, Color color, float width, uint32_t flags)
+void strokePath(ImagePatternHandle imgPatternHandle, Color color, float width, uint32_t flags)
 {
+	Context* ctx = s_ctx;
 	ctxStrokePathImagePattern(ctx, imgPatternHandle, color, width, flags);
 }
 
-void beginClip(Context* ctx, ClipRule::Enum rule)
+void beginClip(ClipRule::Enum rule)
 {
+	Context* ctx = s_ctx;
 	ctxBeginClip(ctx, rule);
 }
 
-void endClip(Context* ctx)
+void endClip()
 {
+	Context* ctx = s_ctx;
 	ctxEndClip(ctx);
 }
 
-void resetClip(Context* ctx)
+void resetClip()
 {
+	Context* ctx = s_ctx;
 	ctxResetClip(ctx);
 }
 
-GradientHandle createLinearGradient(Context* ctx, float sx, float sy, float ex, float ey, Color icol, Color ocol)
+GradientHandle createLinearGradient(float sx, float sy, float ex, float ey, Color icol, Color ocol)
 {
+	Context* ctx = s_ctx;
 	return ctxCreateLinearGradient(ctx, sx, sy, ex, ey, icol, ocol);
 }
 
-GradientHandle createBoxGradient(Context* ctx, float x, float y, float w, float h, float r, float f, Color icol, Color ocol)
+GradientHandle createBoxGradient(float x, float y, float w, float h, float r, float f, Color icol, Color ocol)
 {
+	Context* ctx = s_ctx;
 	return ctxCreateBoxGradient(ctx, x, y, w, h, r, f, icol, ocol);
 }
 
-GradientHandle createRadialGradient(Context* ctx, float cx, float cy, float inr, float outr, Color icol, Color ocol)
+GradientHandle createRadialGradient(float cx, float cy, float inr, float outr, Color icol, Color ocol)
 {
+	Context* ctx = s_ctx;
 	return ctxCreateRadialGradient(ctx, cx, cy, inr, outr, icol, ocol);
 }
 
-ImagePatternHandle createImagePattern(Context* ctx, float cx, float cy, float w, float h, float angle, ImageHandle image)
+ImagePatternHandle createImagePattern(float cx, float cy, float w, float h, float angle, ImageHandle image)
 {
+	Context* ctx = s_ctx;
 	return ctxCreateImagePattern(ctx, cx, cy, w, h, angle, image);
 }
 
-void pushState(Context* ctx)
+void pushState()
 {
+	Context* ctx = s_ctx;
 	ctxPushState(ctx);
 }
 
-void popState(Context* ctx)
+void popState()
 {
+	Context* ctx = s_ctx;
 	ctxPopState(ctx);
 }
 
-void resetScissor(Context* ctx)
+void resetScissor()
 {
+	Context* ctx = s_ctx;
 	ctxResetScissor(ctx);
 }
 
-void setScissor(Context* ctx, float x, float y, float w, float h)
+void setScissor(float x, float y, float w, float h)
 {
+	Context* ctx = s_ctx;
 	ctxSetScissor(ctx, x, y, w, h);
 }
 
-bool intersectScissor(Context* ctx, float x, float y, float w, float h)
+bool intersectScissor(float x, float y, float w, float h)
 {
+	Context* ctx = s_ctx;
 	return ctxIntersectScissor(ctx, x, y, w, h);
 }
 
-void transformIdentity(Context* ctx)
+void transformIdentity()
 {
+	Context* ctx = s_ctx;
 	ctxTransformIdentity(ctx);
 }
 
-void transformScale(Context* ctx, float x, float y)
+void transformScale(float x, float y)
 {
+	Context* ctx = s_ctx;
 	ctxTransformScale(ctx, x, y);
 }
 
-void transformTranslate(Context* ctx, float x, float y)
+void transformTranslate(float x, float y)
 {
+	Context* ctx = s_ctx;
 	ctxTransformTranslate(ctx, x, y);
 }
 
-void transformRotate(Context* ctx, float ang_rad)
+void transformRotate(float ang_rad)
 {
+	Context* ctx = s_ctx;
 	ctxTransformRotate(ctx, ang_rad);
 }
 
-void transformMult(Context* ctx, const float* mtx, TransformOrder::Enum order)
+void transformMult(const float* mtx, TransformOrder::Enum order)
 {
+	Context* ctx = s_ctx;
 	ctxTransformMult(ctx, mtx, order);
 }
 
-void setViewBox(Context* ctx, float x, float y, float w, float h)
+void setViewBox(float x, float y, float w, float h)
 {
+	Context* ctx = s_ctx;
 	ctxSetViewBox(ctx, x, y, w, h);
 }
 
-void indexedTriList(Context* ctx, const float* pos, const uv_t* uv, uint32_t numVertices, const Color* colors, uint32_t numColors, const uint16_t* indices, uint32_t numIndices, ImageHandle img)
+void indexedTriList(const float* pos, const uv_t* uv, uint32_t numVertices, const Color* colors, uint32_t numColors, const uint16_t* indices, uint32_t numIndices, ImageHandle img)
 {
+	Context* ctx = s_ctx;
 	ctxIndexedTriList(ctx, pos, uv, numVertices, colors, numColors, indices, numIndices, img);
 }
 
-void text(Context* ctx, const TextConfig& cfg, float x, float y, const char* str, const char* end)
+void text(const TextConfig& cfg, float x, float y, const char* str, const char* end)
 {
+	Context* ctx = s_ctx;
 	ctxText(ctx, cfg, x, y, str, end);
 }
 
-void textBox(Context* ctx, const TextConfig& cfg, float x, float y, float breakWidth, const char* str, const char* end, uint32_t textboxFlags)
+void textBox(const TextConfig& cfg, float x, float y, float breakWidth, const char* str, const char* end, uint32_t textboxFlags)
 {
+	Context* ctx = s_ctx;
 	ctxTextBox(ctx, cfg, x, y, breakWidth, str, end, textboxFlags);
 }
 
-void submitCommandList(Context* ctx, CommandListHandle handle)
+void submitCommandList(CommandListHandle handle)
 {
+	Context* ctx = s_ctx;
 	ctxSubmitCommandList(ctx, handle);
 }
 
-void setGlobalAlpha(Context* ctx, float alpha)
+void setGlobalAlpha(float alpha)
 {
+	Context* ctx = s_ctx;
 	ctxSetGlobalAlpha(ctx, alpha);
 }
 
-void getTransform(Context* ctx, float* mtx)
+void getTransform(float* mtx)
 {
+	Context* ctx = s_ctx;
 	const State* state = getState(ctx);
 	bx::memCopy(mtx, state->m_TransformMtx, sizeof(float) * 6);
 }
 
-void getScissor(Context* ctx, float* rect)
+void getScissor(float* rect)
 {
+	Context* ctx = s_ctx;
 	const State* state = getState(ctx);
 	bx::memCopy(rect, state->m_ScissorRect, sizeof(float) * 4);
 }
 
-FontHandle createFont(Context* ctx, const char* name, uint8_t* data, uint32_t size, uint32_t flags)
+FontHandle createFont(const char* name, uint8_t* data, uint32_t size, uint32_t flags)
 {
+	Context* ctx = s_ctx;
 	return fsAddFont(ctx->m_FontSystem, name, data, size, flags);
 }
 
-FontHandle getFontByName(Context* ctx, const char* name)
+FontHandle getFontByName(const char* name)
 {
+	Context* ctx = s_ctx;
 	return fsFindFont(ctx->m_FontSystem, name);
 }
 
-bool setFallbackFont(Context* ctx, FontHandle base, FontHandle fallback)
+bool setFallbackFont(FontHandle base, FontHandle fallback)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(base) && isValid(fallback), "Invalid font handle");
 	return fsAddFallbackFont(ctx->m_FontSystem, base, fallback);
 }
 
-float measureText(Context* ctx, const TextConfig& cfg, float x, float y, const char* str, const char* end, float* bounds)
+float measureText(const TextConfig& cfg, float x, float y, const char* str, const char* end, float* bounds)
 {
+	Context* ctx = s_ctx;
 	const uint32_t len = end
 		? (uint32_t)(end - str)
 		: bx::strLen(str)
@@ -1266,8 +1324,9 @@ float measureText(Context* ctx, const TextConfig& cfg, float x, float y, const c
 	return mesh.m_Width;
 }
 
-void measureTextBox(Context* ctx, const TextConfig& cfg, float x, float y, float breakWidth, const char* str, const char* end, float* bounds, uint32_t textBreakFlags)
+void measureTextBox(const TextConfig& cfg, float x, float y, float breakWidth, const char* str, const char* end, float* bounds, uint32_t textBreakFlags)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(bounds != nullptr, "There's no point in calling this functions without a valid bounds pointer.");
 
 	end = end
@@ -1275,10 +1334,10 @@ void measureTextBox(Context* ctx, const TextConfig& cfg, float x, float y, float
 		: str + bx::strLen(str)
 		;
 
-	const TextAlignHor::Enum halign = (TextAlignHor::Enum)((cfg.m_Alignment & VG_TEXT_ALIGN_HOR_Msk) >> VG_TEXT_ALIGN_HOR_Pos);
-	const TextAlignVer::Enum valign = (TextAlignVer::Enum)((cfg.m_Alignment & VG_TEXT_ALIGN_VER_Msk) >> VG_TEXT_ALIGN_VER_Pos);
+	const TextAlignHor::Enum halign = (TextAlignHor::Enum)((cfg.alignment & VG_TEXT_ALIGN_HOR_Msk) >> VG_TEXT_ALIGN_HOR_Pos);
+	const TextAlignVer::Enum valign = (TextAlignVer::Enum)((cfg.alignment & VG_TEXT_ALIGN_VER_Msk) >> VG_TEXT_ALIGN_VER_Pos);
 
-	const TextConfig newCfg = makeTextConfig(ctx, cfg.m_FontHandle, cfg.m_FontSize, VG_TEXT_ALIGN(vg::TextAlignHor::Left, valign), cfg.m_Color, cfg.m_Blur, cfg.m_Spacing);
+	const TextConfig newCfg = makeTextConfig(cfg.fontHandle, cfg.fontSize, VG_TEXT_ALIGN(vg::TextAlignHor::Left, valign), cfg.color, cfg.blur, cfg.spacing);
 
 	fsLineBounds(ctx->m_FontSystem, newCfg, y, &bounds[1], &bounds[3]);
 	const float lineHeight = bounds[3] - bounds[1];
@@ -1307,18 +1366,21 @@ void measureTextBox(Context* ctx, const TextConfig& cfg, float x, float y, float
 	}
 }
 
-float getTextLineHeight(Context* ctx, const TextConfig& cfg)
+float getTextLineHeight(const TextConfig& cfg)
 {
+	Context* ctx = s_ctx;
 	return fsGetLineHeight(ctx->m_FontSystem, cfg);
 }
 
-int textBreakLines(Context* ctx, const TextConfig& cfg, const char* str, const char* end, float breakRowWidth, TextRow* rows, int maxRows, uint32_t flags)
+int textBreakLines(const TextConfig& cfg, const char* str, const char* end, float breakRowWidth, TextRow* rows, int maxRows, uint32_t flags)
 {
+	Context* ctx = s_ctx;
 	return (int32_t)fsTextBreakLines(ctx->m_FontSystem, cfg, str, end, breakRowWidth, rows, maxRows, flags);
 }
 
-int textGlyphPositions(Context* ctx, const TextConfig& cfg, float x, float y, const char* str, const char* end, GlyphPosition* positions, int maxPositions)
+int textGlyphPositions(const TextConfig& cfg, float x, float y, const char* str, const char* end, GlyphPosition* positions, int maxPositions)
 {
+	Context* ctx = s_ctx;
 	BX_UNUSED(y);
 	const uint32_t len = end
 		? (uint32_t)(end - str)
@@ -1346,8 +1408,9 @@ int textGlyphPositions(Context* ctx, const TextConfig& cfg, float x, float y, co
 	return n;
 }
 
-bool getImageSize(Context* ctx, ImageHandle handle, uint16_t* w, uint16_t* h)
+bool getImageSize(ImageHandle handle, uint16_t* w, uint16_t* h)
 {
+	Context* ctx = s_ctx;
 	if (!isValid(handle)) {
 		*w = UINT16_MAX;
 		*h = UINT16_MAX;
@@ -1367,8 +1430,9 @@ bool getImageSize(Context* ctx, ImageHandle handle, uint16_t* w, uint16_t* h)
 	return true;
 }
 
-ImageHandle createImage(Context* ctx, uint16_t w, uint16_t h, uint32_t flags, const uint8_t* data)
+ImageHandle createImage(uint16_t w, uint16_t h, uint32_t flags, const uint8_t* data)
 {
+	Context* ctx = s_ctx;
 	ImageHandle handle = allocImage(ctx);
 	if (!isValid(handle)) {
 		return VG_INVALID_HANDLE;
@@ -1416,8 +1480,9 @@ ImageHandle createImage(Context* ctx, uint16_t w, uint16_t h, uint32_t flags, co
 	return handle;
 }
 
-ImageHandle createImage(Context* ctx, uint32_t flags, const bgfx::TextureHandle& bgfxTextureHandle)
+ImageHandle createImage(uint32_t flags, const bgfx::TextureHandle& bgfxTextureHandle)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(bgfx::isValid(bgfxTextureHandle), "Invalid bgfx texture handle");
 
 	ImageHandle handle = allocImage(ctx);
@@ -1452,8 +1517,9 @@ ImageHandle createImage(Context* ctx, uint32_t flags, const bgfx::TextureHandle&
 	return handle;
 }
 
-bool updateImage(Context* ctx, ImageHandle image, uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint8_t* data)
+bool updateImage(ImageHandle image, uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint8_t* data)
 {
+	Context* ctx = s_ctx;
 	if (!isValid(image)) {
 		return false;
 	}
@@ -1472,8 +1538,9 @@ bool updateImage(Context* ctx, ImageHandle image, uint16_t x, uint16_t y, uint16
 	return true;
 }
 
-bool destroyImage(Context* ctx, ImageHandle img)
+bool destroyImage(ImageHandle img)
 {
+	Context* ctx = s_ctx;
 	if (!isValid(img)) {
 		return false;
 	}
@@ -1490,8 +1557,9 @@ bool destroyImage(Context* ctx, ImageHandle img)
 	return true;
 }
 
-bool isImageValid(Context* ctx, ImageHandle image)
+bool isImageValid(ImageHandle image)
 {
+	Context* ctx = s_ctx;
 	if (!isValid(image)) {
 		return false;
 	}
@@ -1500,8 +1568,9 @@ bool isImageValid(Context* ctx, ImageHandle image)
 	return bgfx::isValid(tex->m_bgfxHandle);
 }
 
-CommandListHandle createCommandList(Context* ctx, uint32_t flags)
+CommandListHandle createCommandList(uint32_t flags)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(!isValid(ctx->m_ActiveCommandList), "Cannot create command list while inside a beginCommandList()/endCommandList() block");
 
 	CommandListHandle handle = allocCommandList(ctx);
@@ -1515,8 +1584,9 @@ CommandListHandle createCommandList(Context* ctx, uint32_t flags)
 	return handle;
 }
 
-void destroyCommandList(Context* ctx, CommandListHandle handle)
+void destroyCommandList(CommandListHandle handle)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(!isValid(ctx->m_ActiveCommandList), "Cannot destroy command list while inside a beginCommandList()/endCommandList() block");
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 
@@ -1530,8 +1600,8 @@ void destroyCommandList(Context* ctx, CommandListHandle handle)
 	}
 #endif
 
-	ctx->m_Stats.m_CmdListMemoryTotal -= cl->m_CommandBufferCapacity;
-	ctx->m_Stats.m_CmdListMemoryUsed -= cl->m_CommandBufferPos;
+	ctx->m_Stats.cmdListMemoryTotal -= cl->m_CommandBufferCapacity;
+	ctx->m_Stats.cmdListMemoryUsed -= cl->m_CommandBufferPos;
 
 	if (cl->m_CommandBuffer) {
 		bx::alignedFree(allocator, cl->m_CommandBuffer, VG_CONFIG_COMMAND_LIST_ALIGNMENT);
@@ -1543,8 +1613,9 @@ void destroyCommandList(Context* ctx, CommandListHandle handle)
 	ctx->m_CmdListHandleAlloc->free(handle.idx);
 }
 
-void resetCommandList(Context* ctx, CommandListHandle handle)
+void resetCommandList(CommandListHandle handle)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1556,23 +1627,25 @@ void resetCommandList(Context* ctx, CommandListHandle handle)
 	BX_UNUSED(ctx);
 #endif
 
-	ctx->m_Stats.m_CmdListMemoryUsed -= cl->m_CommandBufferPos;
+	ctx->m_Stats.cmdListMemoryUsed -= cl->m_CommandBufferPos;
 	cl->m_CommandBufferPos = 0;
 	cl->m_StringBufferPos = 0;
 	cl->m_NumImagePatterns = 0;
 	cl->m_NumGradients = 0;
 }
 
-void clBeginPath(Context* ctx, CommandListHandle handle)
+void clBeginPath(CommandListHandle handle)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
 	clAllocCommand(ctx, cl, CommandType::BeginPath, 0);
 }
 
-void clMoveTo(Context* ctx, CommandListHandle handle, float x, float y)
+void clMoveTo(CommandListHandle handle, float x, float y)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1581,8 +1654,9 @@ void clMoveTo(Context* ctx, CommandListHandle handle, float x, float y)
 	CMD_WRITE(ptr, float, y);
 }
 
-void clLineTo(Context* ctx, CommandListHandle handle, float x, float y)
+void clLineTo(CommandListHandle handle, float x, float y)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1591,8 +1665,9 @@ void clLineTo(Context* ctx, CommandListHandle handle, float x, float y)
 	CMD_WRITE(ptr, float, y);
 }
 
-void clCubicTo(Context* ctx, CommandListHandle handle, float c1x, float c1y, float c2x, float c2y, float x, float y)
+void clCubicTo(CommandListHandle handle, float c1x, float c1y, float c2x, float c2y, float x, float y)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1605,8 +1680,9 @@ void clCubicTo(Context* ctx, CommandListHandle handle, float c1x, float c1y, flo
 	CMD_WRITE(ptr, float, y);
 }
 
-void clQuadraticTo(Context* ctx, CommandListHandle handle, float cx, float cy, float x, float y)
+void clQuadraticTo(CommandListHandle handle, float cx, float cy, float x, float y)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1617,8 +1693,9 @@ void clQuadraticTo(Context* ctx, CommandListHandle handle, float cx, float cy, f
 	CMD_WRITE(ptr, float, y);
 }
 
-void clArc(Context* ctx, CommandListHandle handle, float cx, float cy, float r, float a0, float a1, Winding::Enum dir)
+void clArc(CommandListHandle handle, float cx, float cy, float r, float a0, float a1, Winding::Enum dir)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1631,8 +1708,9 @@ void clArc(Context* ctx, CommandListHandle handle, float cx, float cy, float r, 
 	CMD_WRITE(ptr, Winding::Enum, dir);
 }
 
-void clArcTo(Context* ctx, CommandListHandle handle, float x1, float y1, float x2, float y2, float r)
+void clArcTo(CommandListHandle handle, float x1, float y1, float x2, float y2, float r)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1644,8 +1722,9 @@ void clArcTo(Context* ctx, CommandListHandle handle, float x1, float y1, float x
 	CMD_WRITE(ptr, float, r);
 }
 
-void clRect(Context* ctx, CommandListHandle handle, float x, float y, float w, float h)
+void clRect(CommandListHandle handle, float x, float y, float w, float h)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1656,8 +1735,9 @@ void clRect(Context* ctx, CommandListHandle handle, float x, float y, float w, f
 	CMD_WRITE(ptr, float, h);
 }
 
-void clRoundedRect(Context* ctx, CommandListHandle handle, float x, float y, float w, float h, float r)
+void clRoundedRect(CommandListHandle handle, float x, float y, float w, float h, float r)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1669,8 +1749,9 @@ void clRoundedRect(Context* ctx, CommandListHandle handle, float x, float y, flo
 	CMD_WRITE(ptr, float, r);
 }
 
-void clRoundedRectVarying(Context* ctx, CommandListHandle handle, float x, float y, float w, float h, float rtl, float rtr, float rbr, float rbl)
+void clRoundedRectVarying(CommandListHandle handle, float x, float y, float w, float h, float rtl, float rtr, float rbr, float rbl)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1685,8 +1766,9 @@ void clRoundedRectVarying(Context* ctx, CommandListHandle handle, float x, float
 	CMD_WRITE(ptr, float, rbl);
 }
 
-void clCircle(Context* ctx, CommandListHandle handle, float cx, float cy, float radius)
+void clCircle(CommandListHandle handle, float cx, float cy, float radius)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1696,8 +1778,9 @@ void clCircle(Context* ctx, CommandListHandle handle, float cx, float cy, float 
 	CMD_WRITE(ptr, float, radius);
 }
 
-void clEllipse(Context* ctx, CommandListHandle handle, float cx, float cy, float rx, float ry)
+void clEllipse(CommandListHandle handle, float cx, float cy, float rx, float ry)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1708,8 +1791,9 @@ void clEllipse(Context* ctx, CommandListHandle handle, float cx, float cy, float
 	CMD_WRITE(ptr, float, ry);
 }
 
-void clPolyline(Context* ctx, CommandListHandle handle, const float* coords, uint32_t numPoints)
+void clPolyline(CommandListHandle handle, const float* coords, uint32_t numPoints)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1718,16 +1802,18 @@ void clPolyline(Context* ctx, CommandListHandle handle, const float* coords, uin
 	bx::memCopy(ptr, coords, sizeof(float) * 2 * numPoints);
 }
 
-void clClosePath(Context* ctx, CommandListHandle handle)
+void clClosePath(CommandListHandle handle)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
 	clAllocCommand(ctx, cl, CommandType::ClosePath, 0);
 }
 
-void clIndexedTriList(Context* ctx, CommandListHandle handle, const float* pos, const uv_t* uv, uint32_t numVertices, const Color* color, uint32_t numColors, const uint16_t* indices, uint32_t numIndices, ImageHandle img)
+void clIndexedTriList(CommandListHandle handle, const float* pos, const uv_t* uv, uint32_t numVertices, const Color* color, uint32_t numColors, const uint16_t* indices, uint32_t numIndices, ImageHandle img)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1773,8 +1859,9 @@ void clIndexedTriList(Context* ctx, CommandListHandle handle, const float* pos, 
 	CMD_WRITE(ptr, uint16_t, img.idx);
 }
 
-void clFillPath(Context* ctx, CommandListHandle handle, Color color, uint32_t flags)
+void clFillPath(CommandListHandle handle, Color color, uint32_t flags)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1783,8 +1870,9 @@ void clFillPath(Context* ctx, CommandListHandle handle, Color color, uint32_t fl
 	CMD_WRITE(ptr, Color, color);
 }
 
-void clFillPath(Context* ctx, CommandListHandle handle, GradientHandle gradient, uint32_t flags)
+void clFillPath(CommandListHandle handle, GradientHandle gradient, uint32_t flags)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	VG_CHECK(isValid(gradient), "Invalid gradient handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
@@ -1797,8 +1885,9 @@ void clFillPath(Context* ctx, CommandListHandle handle, GradientHandle gradient,
 	CMD_WRITE(ptr, uint16_t, gradient.flags);
 }
 
-void clFillPath(Context* ctx, CommandListHandle handle, ImagePatternHandle img, Color color, uint32_t flags)
+void clFillPath(CommandListHandle handle, ImagePatternHandle img, Color color, uint32_t flags)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	VG_CHECK(isValid(img), "Invalid image pattern handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
@@ -1812,8 +1901,9 @@ void clFillPath(Context* ctx, CommandListHandle handle, ImagePatternHandle img, 
 	CMD_WRITE(ptr, uint16_t, img.flags);
 }
 
-void clStrokePath(Context* ctx, CommandListHandle handle, Color color, float width, uint32_t flags)
+void clStrokePath(CommandListHandle handle, Color color, float width, uint32_t flags)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1823,8 +1913,9 @@ void clStrokePath(Context* ctx, CommandListHandle handle, Color color, float wid
 	CMD_WRITE(ptr, Color, color);
 }
 
-void clStrokePath(Context* ctx, CommandListHandle handle, GradientHandle gradient, float width, uint32_t flags)
+void clStrokePath(CommandListHandle handle, GradientHandle gradient, float width, uint32_t flags)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	VG_CHECK(isValid(gradient), "Invalid gradient handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
@@ -1838,8 +1929,9 @@ void clStrokePath(Context* ctx, CommandListHandle handle, GradientHandle gradien
 	CMD_WRITE(ptr, uint16_t, gradient.flags);
 }
 
-void clStrokePath(Context* ctx, CommandListHandle handle, ImagePatternHandle img, Color color, float width, uint32_t flags)
+void clStrokePath(CommandListHandle handle, ImagePatternHandle img, Color color, float width, uint32_t flags)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	VG_CHECK(isValid(img), "Invalid image pattern handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
@@ -1854,8 +1946,9 @@ void clStrokePath(Context* ctx, CommandListHandle handle, ImagePatternHandle img
 	CMD_WRITE(ptr, uint16_t, img.flags);
 }
 
-void clBeginClip(Context* ctx, CommandListHandle handle, ClipRule::Enum rule)
+void clBeginClip(CommandListHandle handle, ClipRule::Enum rule)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1863,24 +1956,27 @@ void clBeginClip(Context* ctx, CommandListHandle handle, ClipRule::Enum rule)
 	CMD_WRITE(ptr, ClipRule::Enum, rule);
 }
 
-void clEndClip(Context* ctx, CommandListHandle handle)
+void clEndClip(CommandListHandle handle)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
 	clAllocCommand(ctx, cl, CommandType::EndClip, 0);
 }
 
-void clResetClip(Context* ctx, CommandListHandle handle)
+void clResetClip(CommandListHandle handle)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
 	clAllocCommand(ctx, cl, CommandType::ResetClip, 0);
 }
 
-GradientHandle clCreateLinearGradient(Context* ctx, CommandListHandle handle, float sx, float sy, float ex, float ey, Color icol, Color ocol)
+GradientHandle clCreateLinearGradient(CommandListHandle handle, float sx, float sy, float ex, float ey, Color icol, Color ocol)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1897,8 +1993,9 @@ GradientHandle clCreateLinearGradient(Context* ctx, CommandListHandle handle, fl
 	return { gradientHandle, HandleFlags::LocalHandle };
 }
 
-GradientHandle clCreateBoxGradient(Context* ctx, CommandListHandle handle, float x, float y, float w, float h, float r, float f, Color icol, Color ocol)
+GradientHandle clCreateBoxGradient(CommandListHandle handle, float x, float y, float w, float h, float r, float f, Color icol, Color ocol)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1917,8 +2014,9 @@ GradientHandle clCreateBoxGradient(Context* ctx, CommandListHandle handle, float
 	return { gradientHandle, HandleFlags::LocalHandle };
 }
 
-GradientHandle clCreateRadialGradient(Context* ctx, CommandListHandle handle, float cx, float cy, float inr, float outr, Color icol, Color ocol)
+GradientHandle clCreateRadialGradient(CommandListHandle handle, float cx, float cy, float inr, float outr, Color icol, Color ocol)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1935,8 +2033,9 @@ GradientHandle clCreateRadialGradient(Context* ctx, CommandListHandle handle, fl
 	return { gradientHandle, HandleFlags::LocalHandle };
 }
 
-ImagePatternHandle clCreateImagePattern(Context* ctx, CommandListHandle handle, float cx, float cy, float w, float h, float angle, ImageHandle image)
+ImagePatternHandle clCreateImagePattern(CommandListHandle handle, float cx, float cy, float w, float h, float angle, ImageHandle image)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	VG_CHECK(isValid(image), "Invalid image handle");
 
@@ -1957,32 +2056,36 @@ ImagePatternHandle clCreateImagePattern(Context* ctx, CommandListHandle handle, 
 	return { patternHandle, HandleFlags::LocalHandle };
 }
 
-void clPushState(Context* ctx, CommandListHandle handle)
+void clPushState(CommandListHandle handle)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
 	clAllocCommand(ctx, cl, CommandType::PushState, 0);
 }
 
-void clPopState(Context* ctx, CommandListHandle handle)
+void clPopState(CommandListHandle handle)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
 	clAllocCommand(ctx, cl, CommandType::PopState, 0);
 }
 
-void clResetScissor(Context* ctx, CommandListHandle handle)
+void clResetScissor(CommandListHandle handle)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
 	clAllocCommand(ctx, cl, CommandType::ResetScissor, 0);
 }
 
-void clSetScissor(Context* ctx, CommandListHandle handle, float x, float y, float w, float h)
+void clSetScissor(CommandListHandle handle, float x, float y, float w, float h)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -1993,8 +2096,9 @@ void clSetScissor(Context* ctx, CommandListHandle handle, float x, float y, floa
 	CMD_WRITE(ptr, float, h);
 }
 
-void clIntersectScissor(Context* ctx, CommandListHandle handle, float x, float y, float w, float h)
+void clIntersectScissor(CommandListHandle handle, float x, float y, float w, float h)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -2005,16 +2109,18 @@ void clIntersectScissor(Context* ctx, CommandListHandle handle, float x, float y
 	CMD_WRITE(ptr, float, h);
 }
 
-void clTransformIdentity(Context* ctx, CommandListHandle handle)
+void clTransformIdentity(CommandListHandle handle)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
 	clAllocCommand(ctx, cl, CommandType::TransformIdentity, 0);
 }
 
-void clTransformScale(Context* ctx, CommandListHandle handle, float x, float y)
+void clTransformScale(CommandListHandle handle, float x, float y)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -2023,8 +2129,9 @@ void clTransformScale(Context* ctx, CommandListHandle handle, float x, float y)
 	CMD_WRITE(ptr, float, y);
 }
 
-void clTransformTranslate(Context* ctx, CommandListHandle handle, float x, float y)
+void clTransformTranslate(CommandListHandle handle, float x, float y)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -2033,8 +2140,9 @@ void clTransformTranslate(Context* ctx, CommandListHandle handle, float x, float
 	CMD_WRITE(ptr, float, y);
 }
 
-void clTransformRotate(Context* ctx, CommandListHandle handle, float ang_rad)
+void clTransformRotate(CommandListHandle handle, float ang_rad)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -2042,8 +2150,9 @@ void clTransformRotate(Context* ctx, CommandListHandle handle, float ang_rad)
 	CMD_WRITE(ptr, float, ang_rad);
 }
 
-void clTransformMult(Context* ctx, CommandListHandle handle, const float* mtx, TransformOrder::Enum order)
+void clTransformMult(CommandListHandle handle, const float* mtx, TransformOrder::Enum order)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -2053,8 +2162,9 @@ void clTransformMult(Context* ctx, CommandListHandle handle, const float* mtx, T
 	CMD_WRITE(ptr, TransformOrder::Enum, order);
 }
 
-void clSetViewBox(Context* ctx, CommandListHandle handle, float x, float y, float w, float h)
+void clSetViewBox(CommandListHandle handle, float x, float y, float w, float h)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -2065,8 +2175,9 @@ void clSetViewBox(Context* ctx, CommandListHandle handle, float x, float y, floa
 	CMD_WRITE(ptr, float, h);
 }
 
-void clSetGlobalAlpha(Context* ctx, CommandListHandle handle, float alpha)
+void clSetGlobalAlpha(CommandListHandle handle, float alpha)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
@@ -2074,10 +2185,11 @@ void clSetGlobalAlpha(Context* ctx, CommandListHandle handle, float alpha)
 	CMD_WRITE(ptr, float, alpha);
 }
 
-void clText(Context* ctx, CommandListHandle handle, const TextConfig& cfg, float x, float y, const char* str, const char* end)
+void clText(CommandListHandle handle, const TextConfig& cfg, float x, float y, const char* str, const char* end)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
-	VG_CHECK(isValid(cfg.m_FontHandle), "Invalid font handle");
+	VG_CHECK(isValid(cfg.fontHandle), "Invalid font handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
 	const uint32_t len = end ? (uint32_t)(end - str) : (uint32_t)bx::strLen(str);
@@ -2096,10 +2208,11 @@ void clText(Context* ctx, CommandListHandle handle, const TextConfig& cfg, float
 	CMD_WRITE(ptr, uint32_t, len);
 }
 
-void clTextBox(Context* ctx, CommandListHandle handle, const TextConfig& cfg, float x, float y, float breakWidth, const char* str, const char* end, uint32_t textboxFlags)
+void clTextBox(CommandListHandle handle, const TextConfig& cfg, float x, float y, float breakWidth, const char* str, const char* end, uint32_t textboxFlags)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(handle), "Invalid command list handle");
-	VG_CHECK(isValid(cfg.m_FontHandle), "Invalid font handle");
+	VG_CHECK(isValid(cfg.fontHandle), "Invalid font handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
 	const uint32_t len = end ? (uint32_t)(end - str) : (uint32_t)bx::strLen(str);
@@ -2120,8 +2233,9 @@ void clTextBox(Context* ctx, CommandListHandle handle, const TextConfig& cfg, fl
 	CMD_WRITE(ptr, uint32_t, textboxFlags);
 }
 
-void clSubmitCommandList(Context* ctx, CommandListHandle parent, CommandListHandle child)
+void clSubmitCommandList(CommandListHandle parent, CommandListHandle child)
 {
+	Context* ctx = s_ctx;
 	VG_CHECK(isValid(parent), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[parent.idx];
 
@@ -2278,22 +2392,22 @@ static void ctxFillPathColor(Context* ctx, Color color, uint32_t flags)
 
 			if (aa) {
 				strokerConvexFillAA(stroker, &mesh, vtx, numPathVertices, col);
-				colors = mesh.m_ColorBuffer;
-				numColors = mesh.m_NumVertices;
+				colors = mesh.colorBuffer;
+				numColors = mesh.numVertices;
 			} else {
 				strokerConvexFill(stroker, &mesh, vtx, numPathVertices);
 			}
 
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
 			if (hasCache) {
-				addCachedCommand(ctx, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+				addCachedCommand(ctx, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 			}
 #endif
 
 			if (recordClipCommands) {
-				createDrawCommand_Clip(ctx, mesh.m_PosBuffer, mesh.m_NumVertices, mesh.m_IndexBuffer, mesh.m_NumIndices);
+				createDrawCommand_Clip(ctx, mesh.posBuffer, mesh.numVertices, mesh.indexBuffer, mesh.numIndices);
 			} else {
-				createDrawCommand_VertexColor(ctx, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+				createDrawCommand_VertexColor(ctx, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 			}
 		}
 	} else if (pathType == PathType::Concave) {
@@ -2316,8 +2430,8 @@ static void ctxFillPathColor(Context* ctx, Color color, uint32_t flags)
 		bool decomposed = false;
 		if (aa) {
 			decomposed = strokerConcaveFillEndAA(stroker, &mesh, col, fillRule);
-			colors = mesh.m_ColorBuffer;
-			numColors = mesh.m_NumVertices;
+			colors = mesh.colorBuffer;
+			numColors = mesh.numVertices;
 		} else {
 			decomposed = strokerConcaveFillEnd(stroker, &mesh, fillRule);
 		}
@@ -2326,14 +2440,14 @@ static void ctxFillPathColor(Context* ctx, Color color, uint32_t flags)
 		if (decomposed) {
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
 			if (hasCache) {
-				addCachedCommand(ctx, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+				addCachedCommand(ctx, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 			}
 #endif
 
 			if (recordClipCommands) {
-				createDrawCommand_Clip(ctx, mesh.m_PosBuffer, mesh.m_NumVertices, mesh.m_IndexBuffer, mesh.m_NumIndices);
+				createDrawCommand_Clip(ctx, mesh.posBuffer, mesh.numVertices, mesh.indexBuffer, mesh.numIndices);
 			} else {
-				createDrawCommand_VertexColor(ctx, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+				createDrawCommand_VertexColor(ctx, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 			}
 		}
 	}
@@ -2395,19 +2509,19 @@ static void ctxFillPathGradient(Context* ctx, GradientHandle gradientHandle, uin
 
 			if (aa) {
 				strokerConvexFillAA(stroker, &mesh, vtx, numPathVertices, Colors::Black);
-				colors = mesh.m_ColorBuffer;
-				numColors = mesh.m_NumVertices;
+				colors = mesh.colorBuffer;
+				numColors = mesh.numVertices;
 			} else {
 				strokerConvexFill(stroker, &mesh, vtx, numPathVertices);
 			}
 
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
 			if (hasCache) {
-				addCachedCommand(ctx, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+				addCachedCommand(ctx, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 			}
 #endif
 
-			createDrawCommand_ColorGradient(ctx, gradientHandle, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+			createDrawCommand_ColorGradient(ctx, gradientHandle, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 		}
 	} else if (pathType == PathType::Concave) {
 		strokerConcaveFillBegin(stroker);
@@ -2425,8 +2539,8 @@ static void ctxFillPathGradient(Context* ctx, GradientHandle gradientHandle, uin
 		bool decomposed = false;
 		if (aa) {
 			decomposed = strokerConcaveFillEndAA(stroker, &mesh, black, fillRule);
-			colors = mesh.m_ColorBuffer;
-			numColors = mesh.m_NumVertices;
+			colors = mesh.colorBuffer;
+			numColors = mesh.numVertices;
 		} else {
 			decomposed = strokerConcaveFillEnd(stroker, &mesh, fillRule);
 		}
@@ -2435,11 +2549,11 @@ static void ctxFillPathGradient(Context* ctx, GradientHandle gradientHandle, uin
 		if (decomposed) {
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
 			if (hasCache) {
-				addCachedCommand(ctx, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+				addCachedCommand(ctx, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 			}
 #endif
 
-			createDrawCommand_ColorGradient(ctx, gradientHandle, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+			createDrawCommand_ColorGradient(ctx, gradientHandle, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 		}
 	}
 
@@ -2506,19 +2620,19 @@ static void ctxFillPathImagePattern(Context* ctx, ImagePatternHandle imgPatternH
 
 			if (aa) {
 				strokerConvexFillAA(stroker, &mesh, vtx, numPathVertices, col);
-				colors = mesh.m_ColorBuffer;
-				numColors = mesh.m_NumVertices;
+				colors = mesh.colorBuffer;
+				numColors = mesh.numVertices;
 			} else {
 				strokerConvexFill(stroker, &mesh, vtx, numPathVertices);
 			}
 
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
 			if (hasCache) {
-				addCachedCommand(ctx, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+				addCachedCommand(ctx, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 			}
 #endif
 
-			createDrawCommand_ImagePattern(ctx, imgPatternHandle, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+			createDrawCommand_ImagePattern(ctx, imgPatternHandle, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 		}
 	} else if (pathType == PathType::Concave) {
 		strokerConcaveFillBegin(stroker);
@@ -2540,8 +2654,8 @@ static void ctxFillPathImagePattern(Context* ctx, ImagePatternHandle imgPatternH
 		bool decomposed = false;
 		if (aa) {
 			decomposed = strokerConcaveFillEndAA(stroker, &mesh, col, fillRule);
-			colors = mesh.m_ColorBuffer;
-			numColors = mesh.m_NumVertices;
+			colors = mesh.colorBuffer;
+			numColors = mesh.numVertices;
 		} else {
 			decomposed = strokerConcaveFillEnd(stroker, &mesh, fillRule);
 		}
@@ -2550,11 +2664,11 @@ static void ctxFillPathImagePattern(Context* ctx, ImagePatternHandle imgPatternH
 		if (decomposed) {
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
 			if (hasCache) {
-				addCachedCommand(ctx, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+				addCachedCommand(ctx, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 			}
 #endif
 
-			createDrawCommand_ImagePattern(ctx, imgPatternHandle, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+			createDrawCommand_ImagePattern(ctx, imgPatternHandle, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 		}
 	}
 
@@ -2635,22 +2749,22 @@ static void ctxStrokePathColor(Context* ctx, Color color, float width, uint32_t 
 				strokerPolylineStrokeAA(stroker, &mesh, vtx, numPathVertices, isClosed, col, strokeWidth, lineCap, lineJoin);
 			}
 
-			colors = mesh.m_ColorBuffer;
-			numColors = mesh.m_NumVertices;
+			colors = mesh.colorBuffer;
+			numColors = mesh.numVertices;
 		} else {
 			strokerPolylineStroke(stroker, &mesh, vtx, numPathVertices, isClosed, strokeWidth, lineCap, lineJoin);
 		}
 
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
 		if (hasCache) {
-			addCachedCommand(ctx, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+			addCachedCommand(ctx, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 		}
 #endif
 
 		if (recordClipCommands) {
-			createDrawCommand_Clip(ctx, mesh.m_PosBuffer, mesh.m_NumVertices, mesh.m_IndexBuffer, mesh.m_NumIndices);
+			createDrawCommand_Clip(ctx, mesh.posBuffer, mesh.numVertices, mesh.indexBuffer, mesh.numIndices);
 		} else {
-			createDrawCommand_VertexColor(ctx, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+			createDrawCommand_VertexColor(ctx, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 		}
 	}
 
@@ -2723,19 +2837,19 @@ static void ctxStrokePathGradient(Context* ctx, GradientHandle gradientHandle, f
 				strokerPolylineStrokeAA(stroker, &mesh, vtx, numPathVertices, isClosed, vg::Colors::Black, strokeWidth, lineCap, lineJoin);
 			}
 
-			colors = mesh.m_ColorBuffer;
-			numColors = mesh.m_NumVertices;
+			colors = mesh.colorBuffer;
+			numColors = mesh.numVertices;
 		} else {
 			strokerPolylineStroke(stroker, &mesh, vtx, numPathVertices, isClosed, strokeWidth, lineCap, lineJoin);
 		}
 
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
 		if (hasCache) {
-			addCachedCommand(ctx, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+			addCachedCommand(ctx, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 		}
 #endif
 
-		createDrawCommand_ColorGradient(ctx, gradientHandle, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+		createDrawCommand_ColorGradient(ctx, gradientHandle, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 	}
 
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
@@ -2815,19 +2929,19 @@ static void ctxStrokePathImagePattern(Context* ctx, ImagePatternHandle imgPatter
 				strokerPolylineStrokeAA(stroker, &mesh, vtx, numPathVertices, isClosed, col, strokeWidth, lineCap, lineJoin);
 			}
 
-			colors = mesh.m_ColorBuffer;
-			numColors = mesh.m_NumVertices;
+			colors = mesh.colorBuffer;
+			numColors = mesh.numVertices;
 		} else {
 			strokerPolylineStroke(stroker, &mesh, vtx, numPathVertices, isClosed, strokeWidth, lineCap, lineJoin);
 		}
 
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
 		if (hasCache) {
-			addCachedCommand(ctx, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+			addCachedCommand(ctx, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 		}
 #endif
 
-		createDrawCommand_ImagePattern(ctx, imgPatternHandle, mesh.m_PosBuffer, mesh.m_NumVertices, colors, numColors, mesh.m_IndexBuffer, mesh.m_NumIndices);
+		createDrawCommand_ImagePattern(ctx, imgPatternHandle, mesh.posBuffer, mesh.numVertices, colors, numColors, mesh.indexBuffer, mesh.numIndices);
 	}
 
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
@@ -2881,7 +2995,7 @@ static void ctxResetClip(Context* ctx)
 
 static GradientHandle ctxCreateLinearGradient(Context* ctx, float sx, float sy, float ex, float ey, Color icol, Color ocol)
 {
-	if (ctx->m_NextGradientID >= ctx->m_Config.m_MaxGradients) {
+	if (ctx->m_NextGradientID >= ctx->m_Config.maxGradients) {
 		return VG_INVALID_HANDLE32;
 	}
 
@@ -2944,7 +3058,7 @@ static GradientHandle ctxCreateLinearGradient(Context* ctx, float sx, float sy, 
 
 static GradientHandle ctxCreateBoxGradient(Context* ctx, float x, float y, float w, float h, float r, float f, Color icol, Color ocol)
 {
-	if (ctx->m_NextGradientID >= ctx->m_Config.m_MaxGradients) {
+	if (ctx->m_NextGradientID >= ctx->m_Config.maxGradients) {
 		return VG_INVALID_HANDLE32;
 	}
 
@@ -2995,7 +3109,7 @@ static GradientHandle ctxCreateBoxGradient(Context* ctx, float x, float y, float
 
 static GradientHandle ctxCreateRadialGradient(Context* ctx, float cx, float cy, float inr, float outr, Color icol, Color ocol)
 {
-	if (ctx->m_NextGradientID >= ctx->m_Config.m_MaxGradients) {
+	if (ctx->m_NextGradientID >= ctx->m_Config.maxGradients) {
 		return VG_INVALID_HANDLE32;
 	}
 
@@ -3053,7 +3167,7 @@ static ImagePatternHandle ctxCreateImagePattern(Context* ctx, float cx, float cy
 		return VG_INVALID_HANDLE32;
 	}
 
-	if (ctx->m_NextImagePatternID >= ctx->m_Config.m_MaxImagePatterns) {
+	if (ctx->m_NextImagePatternID >= ctx->m_Config.maxImagePatterns) {
 		return VG_INVALID_HANDLE32;
 	}
 
@@ -3103,7 +3217,7 @@ static ImagePatternHandle ctxCreateImagePattern(Context* ctx, float cx, float cy
 
 static void ctxPushState(Context* ctx)
 {
-	VG_CHECK(ctx->m_StateStackTop < (uint32_t)(ctx->m_Config.m_MaxStateStackSize - 1), "State stack overflow");
+	VG_CHECK(ctx->m_StateStackTop < (uint32_t)(ctx->m_Config.maxStateStackSize - 1), "State stack overflow");
 
 	const uint32_t top = ctx->m_StateStackTop;
 	const State* curState = &ctx->m_StateStack[top];
@@ -3349,18 +3463,18 @@ static void ctxText(Context* ctx, const TextConfig& cfg, float x, float y, const
 	const State* state = getState(ctx);
 	const float scale = state->m_FontScale * ctx->m_DevicePixelRatio;
 
-	const uint32_t c = colorSetAlpha(cfg.m_Color, (uint8_t)(state->m_GlobalAlpha * colorGetAlpha(cfg.m_Color)));
+	const uint32_t c = colorSetAlpha(cfg.color, (uint8_t)(state->m_GlobalAlpha * colorGetAlpha(cfg.color)));
 	if (colorGetAlpha(c) == 0) {
 		return;
 	}
 
-	const float scaledFontSize = cfg.m_FontSize * scale;
+	const float scaledFontSize = cfg.fontSize * scale;
 	const uint32_t len = end
 		? (uint32_t)(end - str)
 		: bx::strLen(str)
 		;
 
-	const TextConfig newCfg = makeTextConfig(ctx, cfg.m_FontHandle, scaledFontSize, cfg.m_Alignment, c, cfg.m_Blur * scale, cfg.m_Spacing * scale);
+	const TextConfig newCfg = makeTextConfig(cfg.fontHandle, scaledFontSize, cfg.alignment, c, cfg.blur * scale, cfg.spacing * scale);
 
 	TextMesh mesh;
 	bx::memSet(&mesh, 0, sizeof(TextMesh));
@@ -3370,7 +3484,7 @@ static void ctxText(Context* ctx, const TextConfig& cfg, float x, float y, const
 
 	ctxPushState(ctx);
 	ctxTransformTranslate(ctx, x + mesh.m_Alignment[0] / scale, y + mesh.m_Alignment[1] / scale);
-	renderTextQuads(ctx, mesh.m_Quads, mesh.m_Size, newCfg.m_Color, fsGetFontAtlasImage(ctx->m_FontSystem));
+	renderTextQuads(ctx, mesh.m_Quads, mesh.m_Size, newCfg.color, fsGetFontAtlasImage(ctx->m_FontSystem));
 	ctxPopState(ctx);
 }
 
@@ -3382,10 +3496,10 @@ static void ctxTextBox(Context* ctx, const TextConfig& cfg, float x, float y, fl
 		;
 
 	const float lineHeight = fsGetLineHeight(ctx->m_FontSystem, cfg);
-	const TextAlignHor::Enum halign = (TextAlignHor::Enum)((cfg.m_Alignment & VG_TEXT_ALIGN_HOR_Msk) >> VG_TEXT_ALIGN_HOR_Pos);
-	const TextAlignVer::Enum valign = (TextAlignVer::Enum)((cfg.m_Alignment & VG_TEXT_ALIGN_VER_Msk) >> VG_TEXT_ALIGN_VER_Pos);
+	const TextAlignHor::Enum halign = (TextAlignHor::Enum)((cfg.alignment & VG_TEXT_ALIGN_HOR_Msk) >> VG_TEXT_ALIGN_HOR_Pos);
+	const TextAlignVer::Enum valign = (TextAlignVer::Enum)((cfg.alignment & VG_TEXT_ALIGN_VER_Msk) >> VG_TEXT_ALIGN_VER_Pos);
 
-	const TextConfig newCfg = makeTextConfig(ctx, cfg.m_FontHandle, cfg.m_FontSize, VG_TEXT_ALIGN(vg::TextAlignHor::Left, valign), cfg.m_Color, cfg.m_Blur, cfg.m_Spacing);
+	const TextConfig newCfg = makeTextConfig(cfg.fontHandle, cfg.fontSize, VG_TEXT_ALIGN(vg::TextAlignHor::Left, valign), cfg.color, cfg.blur, cfg.spacing);
 
 	TextRow rows[4];
 	uint32_t numRows = 0;
@@ -3411,7 +3525,7 @@ static void ctxSubmitCommandList(Context* ctx, CommandListHandle handle)
 	VG_CHECK(isCommandListHandleValid(ctx, handle), "Invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 
-	if (ctx->m_SubmitCmdListRecursionDepth >= ctx->m_Config.m_MaxCommandListDepth) {
+	if (ctx->m_SubmitCmdListRecursionDepth >= ctx->m_Config.maxCommandListDepth) {
 		VG_CHECK(false, "SubmitCommandList recursion depth limit reached.");
 		return;
 	}
@@ -3448,8 +3562,8 @@ static void ctxSubmitCommandList(Context* ctx, CommandListHandle handle)
 
 	const uint16_t firstGradientID = (uint16_t)ctx->m_NextGradientID;
 	const uint16_t firstImagePatternID = (uint16_t)ctx->m_NextImagePatternID;
-	VG_CHECK(firstGradientID + cl->m_NumGradients <= ctx->m_Config.m_MaxGradients, "Not enough free gradients for command list. Increase ContextConfig::m_MaxGradients");
-	VG_CHECK(firstImagePatternID + cl->m_NumImagePatterns <= ctx->m_Config.m_MaxImagePatterns, "Not enough free image patterns for command list. Increase ContextConfig::m_MaxImagePatterns");
+	VG_CHECK(firstGradientID + cl->m_NumGradients <= ctx->m_Config.maxGradients, "Not enough free gradients for command list. Increase Init::maxGradients");
+	VG_CHECK(firstImagePatternID + cl->m_NumImagePatterns <= ctx->m_Config.maxImagePatterns, "Not enough free image patterns for command list. Increase Init::maxImagePatterns");
 
 	const uint8_t* cmd = cl->m_CommandBuffer;
 	const uint8_t* cmdListEnd = cl->m_CommandBuffer + cl->m_CommandBufferPos;
@@ -3848,9 +3962,9 @@ static VertexBuffer* allocVertexBuffer(Context* ctx)
 #endif
 
 	VertexBuffer* vb = &ctx->m_VertexBuffers[ctx->m_NumVertexBuffers++];
-	vb->m_Pos = (float*)bx::alloc(ctx->m_PosBufferPool, sizeof(float) * 2 * ctx->m_Config.m_MaxVBVertices);
-	vb->m_Color = (uint32_t*)bx::alloc(ctx->m_ColorBufferPool, sizeof(uint32_t) * ctx->m_Config.m_MaxVBVertices);
-	vb->m_UV = (uv_t*)bx::alloc(ctx->m_UVBufferPool, sizeof(uv_t) * 2 * ctx->m_Config.m_MaxVBVertices);
+	vb->m_Pos = (float*)bx::alloc(ctx->m_PosBufferPool, sizeof(float) * 2 * ctx->m_Config.maxVBVertices);
+	vb->m_Color = (uint32_t*)bx::alloc(ctx->m_ColorBufferPool, sizeof(uint32_t) * ctx->m_Config.maxVBVertices);
+	vb->m_UV = (uv_t*)bx::alloc(ctx->m_UVBufferPool, sizeof(uv_t) * 2 * ctx->m_Config.maxVBVertices);
 	vb->m_Count = 0;
 
 	return vb;
@@ -4023,11 +4137,11 @@ static void createDrawCommand_Clip(Context* ctx, const float* vtx, uint32_t numV
 // vertex buffer cannot hold the specified amount of vertices.
 static uint32_t allocVertices(Context* ctx, uint32_t numVertices, uint32_t* vbID)
 {
-	VG_CHECK(numVertices < ctx->m_Config.m_MaxVBVertices, "A single draw call cannot have more than %d vertices", ctx->m_Config.m_MaxVBVertices);
+	VG_CHECK(numVertices < ctx->m_Config.maxVBVertices, "A single draw call cannot have more than %d vertices", ctx->m_Config.maxVBVertices);
 
 	// Check if the current vertex buffer can hold the specified amount of vertices
 	VertexBuffer* vb = &ctx->m_VertexBuffers[ctx->m_NumVertexBuffers - 1];
-	if (vb->m_Count + numVertices > ctx->m_Config.m_MaxVBVertices) {
+	if (vb->m_Count + numVertices > ctx->m_Config.maxVBVertices) {
 		// It cannot. Allocate a new vb.
 		vb = allocVertexBuffer(ctx);
 		VG_CHECK(vb, "Failed to allocate new Vertex Buffer");
@@ -4178,7 +4292,7 @@ static ImageHandle allocImage(Context* ctx)
 	if (handle.idx >= ctx->m_ImageCapacity) {
 		const uint32_t oldCapacity = ctx->m_ImageCapacity;
 
-		ctx->m_ImageCapacity = bx::min(bx::max(ctx->m_ImageCapacity + 4, handle.idx + 1), ctx->m_Config.m_MaxImages);
+		ctx->m_ImageCapacity = bx::min(bx::max(ctx->m_ImageCapacity + 4, handle.idx + 1), ctx->m_Config.maxImages);
 		ctx->m_Images = (Image*)bx::realloc(ctx->m_Allocator, ctx->m_Images, sizeof(Image) * ctx->m_ImageCapacity);
 		if (!ctx->m_Images) {
 			return VG_INVALID_HANDLE;
@@ -4268,7 +4382,7 @@ static CommandListHandle allocCommandList(Context* ctx)
 		return VG_INVALID_HANDLE;
 	}
 
-	VG_CHECK(handle.idx < ctx->m_Config.m_MaxCommandLists, "Allocated invalid command list handle");
+	VG_CHECK(handle.idx < ctx->m_Config.maxCommandLists, "Allocated invalid command list handle");
 	CommandList* cl = &ctx->m_CmdLists[handle.idx];
 	bx::memSet(cl, 0, sizeof(CommandList));
 
@@ -4315,12 +4429,12 @@ static uint8_t* clAllocCommand(Context* ctx, CommandList* cl, CommandType::Enum 
 		cl->m_CommandBufferCapacity += capacityDelta;
 		cl->m_CommandBuffer = (uint8_t*)bx::alignedRealloc(ctx->m_Allocator, cl->m_CommandBuffer, cl->m_CommandBufferCapacity, VG_CONFIG_COMMAND_LIST_ALIGNMENT);
 
-		ctx->m_Stats.m_CmdListMemoryTotal += capacityDelta;
+		ctx->m_Stats.cmdListMemoryTotal += capacityDelta;
 	}
 
 	uint8_t* ptr = &cl->m_CommandBuffer[pos];
 	cl->m_CommandBufferPos += totalSize;
-	ctx->m_Stats.m_CmdListMemoryUsed += totalSize;
+	ctx->m_Stats.cmdListMemoryUsed += totalSize;
 
 	CommandHeader* hdr = (CommandHeader*)ptr;
 	ptr += kAlignedCommandHeaderSize;
@@ -4473,8 +4587,8 @@ static void clCacheRender(Context* ctx, CommandList* cl)
 
 	const uint16_t firstGradientID = (uint16_t)ctx->m_NextGradientID;
 	const uint16_t firstImagePatternID = (uint16_t)ctx->m_NextImagePatternID;
-	VG_CHECK(firstGradientID + numGradients <= ctx->m_Config.m_MaxGradients, "Not enough free gradients for command list. Increase ContextConfig::m_MaxGradients");
-	VG_CHECK(firstImagePatternID + numImagePatterns <= ctx->m_Config.m_MaxImagePatterns, "Not enough free image patterns for command list. Increase ContextConfig::m_MaxImagePatterns");
+	VG_CHECK(firstGradientID + numGradients <= ctx->m_Config.maxGradients, "Not enough free gradients for command list. Increase Init::maxGradients");
+	VG_CHECK(firstImagePatternID + numImagePatterns <= ctx->m_Config.maxImagePatterns, "Not enough free image patterns for command list. Increase Init::maxImagePatterns");
 	BX_UNUSED(numGradients, numImagePatterns); // For Release builds.
 
 	const uint8_t* cmd = cl->m_CommandBuffer;
