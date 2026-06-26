@@ -1,3 +1,8 @@
+/*
+ * Copyright 2017-2026 Jim Drygiannakis. All rights reserved.
+ * License: https://github.com/jdryg/vg-renderer/blob/master/LICENSE
+ */
+
 #ifndef VG_H
 #define VG_H
 
@@ -462,53 +467,53 @@ void destroyCommandList(CommandListHandle _handle);
 void resetCommandList(CommandListHandle _handle);
 void submitCommandList(CommandListHandle _handle);
 
-void clBeginPath(CommandListHandle _handle);
-void clMoveTo(CommandListHandle _handle, float _x, float _y);
-void clLineTo(CommandListHandle _handle, float _x, float _y);
-void clCubicTo(CommandListHandle _handle, float _c1x, float _c1y, float _c2x, float _c2y, float _x, float _y);
-void clQuadraticTo(CommandListHandle _handle, float _cx, float _cy, float _x, float _y);
-void clArcTo(CommandListHandle _handle, float _x1, float _y1, float _x2, float _y2, float _r);
-void clArc(CommandListHandle _handle, float _cx, float _cy, float _r, float _a0, float _a1, Winding::Enum _dir);
-void clRect(CommandListHandle _handle, float _x, float _y, float _w, float _h);
-void clRoundedRect(CommandListHandle _handle, float _x, float _y, float _w, float _h, float _r);
-void clRoundedRectVarying(CommandListHandle _handle, float _x, float _y, float _w, float _h, float _rtl, float _rtr, float _rbr, float _rbl);
-void clCircle(CommandListHandle _handle, float _cx, float _cy, float _radius);
-void clEllipse(CommandListHandle _handle, float _cx, float _cy, float _rx, float _ry);
-void clPolyline(CommandListHandle _handle, const float* _coords, uint32_t _numPoints);
-void clClosePath(CommandListHandle _handle);
-void clIndexedTriList(CommandListHandle _handle, const float* _pos, const uv_t* _uv, uint32_t _numVertices, const Color* _color, uint32_t _numColors, const uint16_t* _indices, uint32_t _numIndices, ImageHandle _img);
-void clFillPath(CommandListHandle _handle, Color _color, uint32_t _flags);
-void clFillPath(CommandListHandle _handle, GradientHandle _gradient, uint32_t _flags);
-void clFillPath(CommandListHandle _handle, ImagePatternHandle _img, Color _color, uint32_t _flags);
-void clStrokePath(CommandListHandle _handle, Color _color, float _width, uint32_t _flags);
-void clStrokePath(CommandListHandle _handle, GradientHandle _gradient, float _width, uint32_t _flags);
-void clStrokePath(CommandListHandle _handle, ImagePatternHandle _img, Color _color, float _width, uint32_t _flags);
-void clBeginClip(CommandListHandle _handle, ClipRule::Enum _rule);
-void clEndClip(CommandListHandle _handle);
-void clResetClip(CommandListHandle _handle);
+void beginPath(CommandListHandle _handle);
+void moveTo(CommandListHandle _handle, float _x, float _y);
+void lineTo(CommandListHandle _handle, float _x, float _y);
+void cubicTo(CommandListHandle _handle, float _c1x, float _c1y, float _c2x, float _c2y, float _x, float _y);
+void quadraticTo(CommandListHandle _handle, float _cx, float _cy, float _x, float _y);
+void arcTo(CommandListHandle _handle, float _x1, float _y1, float _x2, float _y2, float _r);
+void arc(CommandListHandle _handle, float _cx, float _cy, float _r, float _a0, float _a1, Winding::Enum _dir);
+void rect(CommandListHandle _handle, float _x, float _y, float _w, float _h);
+void roundedRect(CommandListHandle _handle, float _x, float _y, float _w, float _h, float _r);
+void roundedRectVarying(CommandListHandle _handle, float _x, float _y, float _w, float _h, float _rtl, float _rtr, float _rbr, float _rbl);
+void circle(CommandListHandle _handle, float _cx, float _cy, float _radius);
+void ellipse(CommandListHandle _handle, float _cx, float _cy, float _rx, float _ry);
+void polyline(CommandListHandle _handle, const float* _coords, uint32_t _numPoints);
+void closePath(CommandListHandle _handle);
+void indexedTriList(CommandListHandle _handle, const float* _pos, const uv_t* _uv, uint32_t _numVertices, const Color* _color, uint32_t _numColors, const uint16_t* _indices, uint32_t _numIndices, ImageHandle _img);
+void fillPath(CommandListHandle _handle, Color _color, uint32_t _flags);
+void fillPath(CommandListHandle _handle, GradientHandle _gradient, uint32_t _flags);
+void fillPath(CommandListHandle _handle, ImagePatternHandle _img, Color _color, uint32_t _flags);
+void strokePath(CommandListHandle _handle, Color _color, float _width, uint32_t _flags);
+void strokePath(CommandListHandle _handle, GradientHandle _gradient, float _width, uint32_t _flags);
+void strokePath(CommandListHandle _handle, ImagePatternHandle _img, Color _color, float _width, uint32_t _flags);
+void beginClip(CommandListHandle _handle, ClipRule::Enum _rule);
+void endClip(CommandListHandle _handle);
+void resetClip(CommandListHandle _handle);
 
-GradientHandle clCreateLinearGradient(CommandListHandle _handle, float _sx, float _sy, float _ex, float _ey, Color _icol, Color _ocol);
-GradientHandle clCreateBoxGradient(CommandListHandle _handle, float _x, float _y, float _w, float _h, float _r, float _f, Color _icol, Color _ocol);
-GradientHandle clCreateRadialGradient(CommandListHandle _handle, float _cx, float _cy, float _inr, float _outr, Color _icol, Color _ocol);
-ImagePatternHandle clCreateImagePattern(CommandListHandle _handle, float _cx, float _cy, float _w, float _h, float _angle, ImageHandle _image);
+GradientHandle createLinearGradient(CommandListHandle _handle, float _sx, float _sy, float _ex, float _ey, Color _icol, Color _ocol);
+GradientHandle createBoxGradient(CommandListHandle _handle, float _x, float _y, float _w, float _h, float _r, float _f, Color _icol, Color _ocol);
+GradientHandle createRadialGradient(CommandListHandle _handle, float _cx, float _cy, float _inr, float _outr, Color _icol, Color _ocol);
+ImagePatternHandle createImagePattern(CommandListHandle _handle, float _cx, float _cy, float _w, float _h, float _angle, ImageHandle _image);
 
-void clPushState(CommandListHandle _handle);
-void clPopState(CommandListHandle _handle);
-void clResetScissor(CommandListHandle _handle);
-void clSetScissor(CommandListHandle _handle, float _x, float _y, float _w, float _h);
-void clIntersectScissor(CommandListHandle _handle, float _x, float _y, float _w, float _h);
-void clTransformIdentity(CommandListHandle _handle);
-void clTransformScale(CommandListHandle _handle, float _x, float _y);
-void clTransformTranslate(CommandListHandle _handle, float _x, float _y);
-void clTransformRotate(CommandListHandle _handle, float _ang_rad);
-void clTransformMult(CommandListHandle _handle, const float* _mtx, TransformOrder::Enum _order);
-void clSetViewBox(CommandListHandle _handle, float _x, float _y, float _w, float _h);
-void clSetGlobalAlpha(CommandListHandle _handle, float _alpha);
+void pushState(CommandListHandle _handle);
+void popState(CommandListHandle _handle);
+void resetScissor(CommandListHandle _handle);
+void setScissor(CommandListHandle _handle, float _x, float _y, float _w, float _h);
+void intersectScissor(CommandListHandle _handle, float _x, float _y, float _w, float _h);
+void transformIdentity(CommandListHandle _handle);
+void transformScale(CommandListHandle _handle, float _x, float _y);
+void transformTranslate(CommandListHandle _handle, float _x, float _y);
+void transformRotate(CommandListHandle _handle, float _ang_rad);
+void transformMult(CommandListHandle _handle, const float* _mtx, TransformOrder::Enum _order);
+void setViewBox(CommandListHandle _handle, float _x, float _y, float _w, float _h);
+void setGlobalAlpha(CommandListHandle _handle, float _alpha);
 
-void clText(CommandListHandle _handle, const TextConfig& _cfg, float _x, float _y, const char* _str, const char* _end);
-void clTextBox(CommandListHandle _handle, const TextConfig& _cfg, float _x, float _y, float _breakWidth, const char* _str, const char* _end, uint32_t _textboxFlags);
+void text(CommandListHandle _handle, const TextConfig& _cfg, float _x, float _y, const char* _str, const char* _end);
+void textBox(CommandListHandle _handle, const TextConfig& _cfg, float _x, float _y, float _breakWidth, const char* _str, const char* _end, uint32_t _textboxFlags);
 
-void clSubmitCommandList(CommandListHandle _parent, CommandListHandle _child);
+void submitCommandList(CommandListHandle _parent, CommandListHandle _child);
 
 TextConfig makeTextConfig(const char* _fontName, float _fontSize, uint32_t _alignment, Color _color, float _blur = 0.0f, float _spacing = 0.0f);
 TextConfig makeTextConfig(FontHandle _fontHandle, float _fontSize, uint32_t _alignment, Color _color, float _blur = 0.0f, float _spacing = 0.0f);

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2017-2026 Jim Drygiannakis. All rights reserved.
+ * License: https://github.com/jdryg/vg-renderer/blob/master/LICENSE
+ */
+
 #include "path.h"
 #include "config.h"
 #include <bx/allocator.h>
@@ -433,7 +438,6 @@ void pathRoundedRectVarying(Path* path, float x, float y, float w, float h, floa
 
 	const float travel_l = h - rtl - rbl;
 	const float travel_r = h - rtr - rbr;
-	const float travel_t = w - rtl - rtr;
 	const float travel_b = w - rbl - rbr;
 
 

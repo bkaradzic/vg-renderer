@@ -1,3 +1,8 @@
+/*
+ * Copyright 2017-2026 Jim Drygiannakis. All rights reserved.
+ * License: https://github.com/jdryg/vg-renderer/blob/master/LICENSE
+ */
+
 #include "stroker.h"
 #include "config.h"
 #include "vg_util.h"
