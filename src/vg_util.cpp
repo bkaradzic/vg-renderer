@@ -1,3 +1,8 @@
+/*
+ * Copyright 2017-2026 Jim Drygiannakis. All rights reserved.
+ * License: https://github.com/jdryg/vg-renderer/blob/master/LICENSE
+ */
+
 #include "vg_util.h"
 #include <vg/vg.h>
 #include "config.h"

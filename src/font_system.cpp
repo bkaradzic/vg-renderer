@@ -1,3 +1,8 @@
+/*
+ * Copyright 2017-2026 Jim Drygiannakis. All rights reserved.
+ * License: https://github.com/jdryg/vg-renderer/blob/master/LICENSE
+ */
+
 // This code is heavily based on FontStash (c) 2009-2013 Mikko Mononen memon@inside.org
 // Some parts of the original code have been removed and other have been added.
 
@@ -197,6 +202,7 @@ FontSystem* fsCreate(vg::Context* ctx, bx::AllocatorI* allocator, const FontSyst
 
 void fsDestroy(FontSystem* fs, vg::Context* ctx)
 {
+	BX_UNUSED(ctx);
 	bx::AllocatorI* allocator = fs->m_Allocator;
 
 	fsTextBufferShutdown(&fs->m_TextBuffer, allocator);
@@ -375,6 +381,7 @@ ImageHandle fsGetFontAtlasImage(const FontSystem* fs)
 
 void fsFlushFontAtlasImage(FontSystem* fs, vg::Context* ctx)
 {
+	BX_UNUSED(ctx);
 	uint16_t dirtyRect[4];
 	if (!fsGetDirtyRect(fs, &dirtyRect[0], true)) {
 		return;
@@ -1252,6 +1259,7 @@ static uint32_t decodeUTF8(uint32_t* state, uint32_t* codep, uint8_t byte)
 
 static void fsUpdateWhitePixelUV(FontSystem* fs, vg::Context* ctx)
 {
+	BX_UNUSED(ctx);
 	uint16_t w, h;
 	getImageSize(fs->m_FontImages[fs->m_FontImageID], &w, &h);
 
@@ -1702,7 +1710,7 @@ static void* fsBackendLoadFont(FontSystem* fs, uint8_t* data, uint32_t dataSize)
 		}
 		for (int cp = FS_STBTT_FIRST_ASCII_CODEPOINT; cp <= FS_STBTT_LAST_ASCII_CODEPOINT; ++cp) {
 			int glyphIdx = stbtt_FindGlyphIndex(&font->font, cp);
-			font->glyph_index_to_ascii[glyphIdx - font->ascii_min_glyph_index] = cp;
+			font->glyph_index_to_ascii[glyphIdx - font->ascii_min_glyph_index] = (uint8_t)cp;
 		}
 	}
 
@@ -1809,7 +1817,7 @@ static int32_t fsBackendGetGlyphKernAdvance(void* fontPtr, int32_t glyph1, int32
 				int kern = stbtt_GetGlyphKernAdvance(&font->font, glyph1, glyph2);
 				if (kern == 0) {
 					// Update to known-to-be-zero
-					uint64_entry |= 1 << bit_idx;
+					uint64_entry |= UINT64_C(1) << bit_idx;
 				} else {
 					// Update to known-to-be-non-zero
 					uint64_entry |= 2 << bit_idx;
