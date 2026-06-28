@@ -1279,8 +1279,12 @@ static void fsTextBufferInit(TextBuffer* tb)
 
 static void fsTextBufferShutdown(TextBuffer* tb, bx::AllocatorI* allocator)
 {
-	bx::alignedFree(allocator, tb->m_Buffer, 16);
-	bx::memSet(tb, 0, sizeof(TextBuffer));
+	if (tb->m_Buffer)
+	{
+		bx::alignedFree(allocator, tb->m_Buffer, 16);
+	}
+
+	bx::memSet(tb, 0, sizeof(TextBuffer) );
 }
 
 static bool fsTextBufferExpand(TextBuffer* tb, uint32_t newCapacity, bool keepOldData, bx::AllocatorI* allocator)
