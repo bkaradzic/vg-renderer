@@ -148,6 +148,15 @@ struct TextAlign
 	};
 };
 
+inline bool operator&(TextAlign::Enum a, TextAlignHor::Enum h)
+{
+	return (a & VG_TEXT_ALIGN_HOR_Msk) == (h << VG_TEXT_ALIGN_HOR_Pos);
+}
+inline bool operator&(TextAlign::Enum a, TextAlignVer::Enum v)
+{
+	return (a & VG_TEXT_ALIGN_VER_Msk) == (v << VG_TEXT_ALIGN_VER_Pos);
+}
+
 struct LineCap
 {
 	enum Enum : uint32_t
