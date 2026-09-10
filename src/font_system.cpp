@@ -1664,6 +1664,10 @@ static bool fsBackendInit(FontSystem* fs)
 	return true;
 }
 
+/// How much a font may spend on the glyph-pair kerning cache before it goes
+/// without one. 1MB covers any font up to ~2000 glyphs.
+#define FS_STBTT_MAX_KERN_CACHE_BYTES (1 * 1024 * 1024)
+
 static void* fsBackendLoadFont(FontSystem* fs, uint8_t* data, uint32_t dataSize)
 {
 	BX_UNUSED(dataSize);
@@ -1674,7 +1678,19 @@ static void* fsBackendLoadFont(FontSystem* fs, uint8_t* data, uint32_t dataSize)
 	bx::memSet(font, 0, sizeof(FontStb));
 
 	font->font.userdata = nullptr;
-	int32_t stbError = stbtt_InitFont(&font->font, data, 0);
+
+	// A .ttc holds several faces behind a "ttcf" header, and its first face
+	// does not start at offset 0. stbtt_GetFontOffsetForIndex finds it, and
+	// answers 0 for a plain .ttf/.otf, so this is the same call for both.
+	// Without it every font collection - which is how Noto CJK, PingFang and
+	// Microsoft YaHei all ship - fails to load at all.
+	const int32_t fontOffset = stbtt_GetFontOffsetForIndex(data, 0);
+	if (fontOffset < 0) {
+		bx::free(allocator, font);
+		return nullptr;
+	}
+
+	int32_t stbError = stbtt_InitFont(&font->font, data, fontOffset);
 	if (!stbError) {
 		bx::free(allocator, font);
 		return nullptr;
@@ -1696,11 +1712,25 @@ static void* fsBackendLoadFont(FontSystem* fs, uint8_t* data, uint32_t dataSize)
 
 	const int range_glyph_indices_ascii = maxAsciiGlyphIndex - minAsciiGlyphIndex + 1;
 	{
-		const int total_pairs = font->font.numGlyphs * font->font.numGlyphs;
-		const int total_bits = total_pairs * 2;
-		const int total_uint64s = (total_bits + 63) / 64;
-		font->kern_codemap = (uint64_t*)bx::alloc(allocator, total_uint64s * sizeof(uint64_t));
-		bx::memSet(font->kern_codemap, 0, total_uint64s * sizeof(uint64_t));
+		// Two bits per ordered glyph pair, so the cost is quadratic in the
+		// glyph count: fine for a text font of a thousand glyphs (250KB),
+		// ruinous for a CJK font of sixty-five thousand (over a gigabyte, and
+		// the pair count overflows an int on the way there). Past the limit
+		// the cache is simply declined; every reader already checks for null
+		// and falls through to asking stbtt directly.
+		const int64_t numGlyphs = (int64_t)font->font.numGlyphs;
+		const int64_t total_pairs = numGlyphs * numGlyphs;
+		const int64_t total_uint64s = (total_pairs * 2 + 63) / 64;
+		const int64_t max_uint64s = FS_STBTT_MAX_KERN_CACHE_BYTES / (int64_t)sizeof(uint64_t);
+		if (total_uint64s <= max_uint64s) {
+			const size_t bytes = (size_t)total_uint64s * sizeof(uint64_t);
+			font->kern_codemap = (uint64_t*)bx::alloc(allocator, bytes);
+			if (font->kern_codemap) {
+				bx::memSet(font->kern_codemap, 0, bytes);
+			}
+		} else {
+			font->kern_codemap = nullptr;
+		}
 	}
 	font->glyph_index_to_ascii = (uint8_t*)bx::alloc(allocator, sizeof(uint8_t) * range_glyph_indices_ascii);
 	if (font->glyph_index_to_ascii)
