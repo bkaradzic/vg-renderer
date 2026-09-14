@@ -7,6 +7,7 @@
 #define VG_H
 
 #include <stdint.h>
+#include <stdlib.h>
 // UV component type of the public vertex API (see uv_t below). This is the one
 // build-time switch that affects the public ABI; all other tuning is internal
 // (src/config.h).
