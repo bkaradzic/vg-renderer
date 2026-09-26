@@ -437,7 +437,7 @@ TESShalfEdge *tessMeshAddEdgeVertex( TESSmesh *mesh, TESShalfEdge *eOrg )
 	eNew->Org = eOrg->Dst;
 	{
 		TESSvertex *newVertex= (TESSvertex*)bucketAlloc( mesh->vertexBucket );
-		if (newVertex == NULL) return NULL;
+		if (newVertex == NULL || eNew->Org == NULL) return NULL;
 
 		MakeVertex( newVertex, eNewSym, eNew->Org );
 	}
@@ -750,6 +750,8 @@ int tessMeshMergeConvexFaces( TESSmesh *mesh, int maxVertsPerFace )
 
 void tessMeshFlipEdge( TESSmesh *mesh, TESShalfEdge *edge )
 {
+	TESS_NOTUSED(mesh);
+
 	TESShalfEdge *a0 = edge;
 	TESShalfEdge *a1 = a0->Lnext;
 	TESShalfEdge *a2 = a1->Lnext;

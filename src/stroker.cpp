@@ -144,12 +144,13 @@ struct libtess2Allocator
 static void* libtess2Alloc(void* userData, uint32_t size)
 {
 	libtess2Allocator* alloc = (libtess2Allocator*)userData;
-	if (alloc->m_Size + size > alloc->m_Capacity) {
-		return nullptr;
-	}
 
 	// Align all allocations to 16 bytes
 	uint32_t offset = (alloc->m_Size & ~0x0F) + ((alloc->m_Size & 0x0F) != 0 ? 0x10 : 0);
+
+	if (offset + size > alloc->m_Capacity) {
+		return nullptr;
+	}
 
 	uint8_t* mem = &alloc->m_Buffer[offset];
 	alloc->m_Size = offset + size;

@@ -2819,7 +2819,7 @@ void Context::fillPathColor(Color _color, uint32_t _flags)
 			const SubPath* subPath = &subPaths[ii];
 			if (subPath->m_NumVertices < 3)
 			{
-				return;
+				continue;
 			}
 
 			const float* vtx = &pathVertices[subPath->m_FirstVertexID << 1];
@@ -2953,7 +2953,7 @@ void Context::fillPathGradient(GradientHandle _gradientHandle, uint32_t _flags)
 			const SubPath* subPath = &subPaths[ii];
 			if (subPath->m_NumVertices < 3)
 			{
-				return;
+				continue;
 			}
 
 			const float* vtx = &pathVertices[subPath->m_FirstVertexID << 1];
@@ -3083,7 +3083,7 @@ void Context::fillPathImagePattern(ImagePatternHandle _imgPatternHandle, Color _
 			const SubPath* subPath = &subPaths[ii];
 			if (subPath->m_NumVertices < 3)
 			{
-				return;
+				continue;
 			}
 
 			const float* vtx = &pathVertices[subPath->m_FirstVertexID << 1];
