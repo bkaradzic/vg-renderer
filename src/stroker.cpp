@@ -134,34 +134,130 @@ static inline bx::simd128_t simd128_rcp(bx::simd128_t a)
 }
 #endif
 
+struct libtess2AllocHeader
+{
+	libtess2AllocHeader* m_Next;
+	libtess2AllocHeader* m_Prev;
+	uint32_t m_Size;
+	uint32_t m_Heap;
+};
+
+static const uint32_t kLibtess2HeaderSize = 32;
+static_assert(sizeof(libtess2AllocHeader) <= kLibtess2HeaderSize, "libtess2 allocation header doesn't fit.");
+
 struct libtess2Allocator
 {
+	bx::AllocatorI* m_Allocator;
 	uint8_t* m_Buffer;
 	uint32_t m_Capacity;
 	uint32_t m_Size;
+	libtess2AllocHeader* m_HeapList;
 };
+
+// libtess2 doesn't free everything when tessellation fails.
+static void libtess2Reset(libtess2Allocator* alloc)
+{
+	while (alloc->m_HeapList) {
+		libtess2AllocHeader* header = alloc->m_HeapList;
+		alloc->m_HeapList = header->m_Next;
+		bx::alignedFree(alloc->m_Allocator, header, 16);
+	}
+
+	alloc->m_Size = 0;
+}
+
+#if VG_CONFIG_LIBTESS2_SCRATCH_BUFFER
+static libtess2AllocHeader* libtess2GetHeader(void* ptr)
+{
+	return (libtess2AllocHeader*)((uint8_t*)ptr - kLibtess2HeaderSize);
+}
 
 static void* libtess2Alloc(void* userData, uint32_t size)
 {
 	libtess2Allocator* alloc = (libtess2Allocator*)userData;
 
 	// Align all allocations to 16 bytes
-	uint32_t offset = (alloc->m_Size & ~0x0F) + ((alloc->m_Size & 0x0F) != 0 ? 0x10 : 0);
+	const uint32_t offset = (alloc->m_Size & ~0x0F) + ((alloc->m_Size & 0x0F) != 0 ? 0x10 : 0);
 
-	if (offset + size > alloc->m_Capacity) {
-		return nullptr;
+	libtess2AllocHeader* header;
+	if (offset + kLibtess2HeaderSize + size <= alloc->m_Capacity) {
+		header = (libtess2AllocHeader*)&alloc->m_Buffer[offset];
+		header->m_Next = nullptr;
+		header->m_Prev = nullptr;
+		header->m_Heap = 0;
+		alloc->m_Size = offset + kLibtess2HeaderSize + size;
+	} else {
+		header = (libtess2AllocHeader*)bx::alignedAlloc(alloc->m_Allocator, kLibtess2HeaderSize + size, 16);
+		if (!header) {
+			return nullptr;
+		}
+
+		header->m_Next = alloc->m_HeapList;
+		header->m_Prev = nullptr;
+		header->m_Heap = 1;
+		if (alloc->m_HeapList) {
+			alloc->m_HeapList->m_Prev = header;
+		}
+		alloc->m_HeapList = header;
 	}
 
-	uint8_t* mem = &alloc->m_Buffer[offset];
-	alloc->m_Size = offset + size;
-	return mem;
+	header->m_Size = size;
+	return (uint8_t*)header + kLibtess2HeaderSize;
 }
 
 static void libtess2Free(void* userData, void* ptr)
 {
-	// Don't do anything!
-	BX_UNUSED(userData, ptr);
+	if (!ptr) {
+		return;
+	}
+
+	libtess2AllocHeader* header = libtess2GetHeader(ptr);
+	if (!header->m_Heap) {
+		return;
+	}
+
+	libtess2Allocator* alloc = (libtess2Allocator*)userData;
+	if (header->m_Prev) {
+		header->m_Prev->m_Next = header->m_Next;
+	} else {
+		alloc->m_HeapList = header->m_Next;
+	}
+	if (header->m_Next) {
+		header->m_Next->m_Prev = header->m_Prev;
+	}
+
+	bx::alignedFree(alloc->m_Allocator, header, 16);
 }
+
+static void* libtess2Realloc(void* userData, void* ptr, uint32_t size)
+{
+	if (!ptr) {
+		return libtess2Alloc(userData, size);
+	}
+
+	libtess2Allocator* alloc = (libtess2Allocator*)userData;
+	libtess2AllocHeader* header = libtess2GetHeader(ptr);
+
+	if (!header->m_Heap) {
+		const uint32_t offset = (uint32_t)((uint8_t*)ptr - alloc->m_Buffer);
+		if (offset + header->m_Size == alloc->m_Size
+		&&  offset + size <= alloc->m_Capacity) {
+			header->m_Size = size;
+			alloc->m_Size = offset + size;
+			return ptr;
+		}
+	}
+
+	void* mem = libtess2Alloc(userData, size);
+	if (!mem) {
+		return nullptr;
+	}
+
+	bx::memCopy(mem, ptr, bx::min<uint32_t>(header->m_Size, size));
+	libtess2Free(userData, ptr);
+	return mem;
+}
+#endif // VG_CONFIG_LIBTESS2_SCRATCH_BUFFER
 
 struct Stroker
 {
@@ -217,6 +313,8 @@ void destroyStroker(Stroker* stroker)
 	if (stroker->m_Tesselator) {
 		tessDeleteTess(stroker->m_Tesselator);
 	}
+
+	libtess2Reset(&stroker->m_libTessAllocator);
 
 	if (stroker->m_libTessAllocator.m_Buffer) {
 		bx::alignedFree(allocator, stroker->m_libTessAllocator.m_Buffer, 16);
@@ -758,12 +856,13 @@ bool strokerConcaveFillBegin(Stroker* stroker)
 #if VG_CONFIG_LIBTESS2_SCRATCH_BUFFER
 	// Initialize the allocator once
 	if (!stroker->m_libTessAllocator.m_Buffer) {
+		stroker->m_libTessAllocator.m_Allocator = stroker->m_Allocator;
 		stroker->m_libTessAllocator.m_Capacity = VG_CONFIG_LIBTESS2_SCRATCH_BUFFER;
 		stroker->m_libTessAllocator.m_Buffer = (uint8_t*)bx::alignedAlloc(stroker->m_Allocator, stroker->m_libTessAllocator.m_Capacity, 16);
 	}
 
 	// Reset the allocator.
-	stroker->m_libTessAllocator.m_Size = 0;
+	libtess2Reset(&stroker->m_libTessAllocator);
 
 	// Initialize the tesselator
 	TESSalloc allocator;
@@ -776,7 +875,7 @@ bool strokerConcaveFillBegin(Stroker* stroker)
 	allocator.userData = &stroker->m_libTessAllocator;
 	allocator.memalloc = libtess2Alloc;
 	allocator.memfree = libtess2Free;
-	allocator.memrealloc = nullptr;
+	allocator.memrealloc = libtess2Realloc;
 	stroker->m_Tesselator = tessNewTess(&allocator);
 #else
 	stroker->m_Tesselator = tessNewTess(nullptr);
