@@ -7,7 +7,8 @@
 #include "config.h"
 #include "vg_util.h"
 #include <tesselator.h>
-#include <bx/allocator.h>
+#include <bx/array.h>
+#include <bx/blk.h>
 #include <bx/math.h>
 #include <string.h> // memcpy
 
@@ -147,9 +148,16 @@ static_assert(sizeof(libtess2AllocHeader) <= kLibtess2HeaderSize, "libtess2 allo
 
 struct libtess2Allocator
 {
-	bx::AllocatorI* m_Allocator;
-	uint8_t* m_Buffer;
-	uint32_t m_Capacity;
+	libtess2Allocator(bx::AllocatorHandle allocator)
+		: m_Allocator(bx::getAllocator(allocator) )
+		, m_Buffer(allocator)
+		, m_Size(0)
+		, m_HeapList(nullptr)
+	{
+	}
+
+	bx::AllocatorBlkI* m_Allocator;
+	bx::ArrayT<uint8_t> m_Buffer;
 	uint32_t m_Size;
 	libtess2AllocHeader* m_HeapList;
 };
@@ -160,7 +168,7 @@ static void libtess2Reset(libtess2Allocator* alloc)
 	while (alloc->m_HeapList) {
 		libtess2AllocHeader* header = alloc->m_HeapList;
 		alloc->m_HeapList = header->m_Next;
-		bx::alignedFree(alloc->m_Allocator, header, 16);
+		bx::freePtr(header);
 	}
 
 	alloc->m_Size = 0;
@@ -180,14 +188,14 @@ static void* libtess2Alloc(void* userData, uint32_t size)
 	const uint32_t offset = (alloc->m_Size & ~0x0F) + ((alloc->m_Size & 0x0F) != 0 ? 0x10 : 0);
 
 	libtess2AllocHeader* header;
-	if (offset + kLibtess2HeaderSize + size <= alloc->m_Capacity) {
-		header = (libtess2AllocHeader*)&alloc->m_Buffer[offset];
+	if (offset + kLibtess2HeaderSize + size <= alloc->m_Buffer.getCount()) {
+		header = (libtess2AllocHeader*)alloc->m_Buffer.getPtr(offset);
 		header->m_Next = nullptr;
 		header->m_Prev = nullptr;
 		header->m_Heap = 0;
 		alloc->m_Size = offset + kLibtess2HeaderSize + size;
 	} else {
-		header = (libtess2AllocHeader*)bx::alignedAlloc(alloc->m_Allocator, kLibtess2HeaderSize + size, 16);
+		header = (libtess2AllocHeader*)bx::allocPtr(alloc->m_Allocator, kLibtess2HeaderSize + size, 16);
 		if (!header) {
 			return nullptr;
 		}
@@ -226,7 +234,7 @@ static void libtess2Free(void* userData, void* ptr)
 		header->m_Next->m_Prev = header->m_Prev;
 	}
 
-	bx::alignedFree(alloc->m_Allocator, header, 16);
+	bx::freePtr(header);
 }
 
 static void* libtess2Realloc(void* userData, void* ptr, uint32_t size)
@@ -239,9 +247,9 @@ static void* libtess2Realloc(void* userData, void* ptr, uint32_t size)
 	libtess2AllocHeader* header = libtess2GetHeader(ptr);
 
 	if (!header->m_Heap) {
-		const uint32_t offset = (uint32_t)((uint8_t*)ptr - alloc->m_Buffer);
+		const uint32_t offset = (uint32_t)((uint8_t*)ptr - alloc->m_Buffer.getPtr());
 		if (offset + header->m_Size == alloc->m_Size
-		&&  offset + size <= alloc->m_Capacity) {
+		&&  offset + size <= alloc->m_Buffer.getCount()) {
 			header->m_Size = size;
 			alloc->m_Size = offset + size;
 			return ptr;
@@ -261,14 +269,25 @@ static void* libtess2Realloc(void* userData, void* ptr, uint32_t size)
 
 struct Stroker
 {
-	bx::AllocatorI* m_Allocator;
-	Vec2* m_PosBuffer;
-	uint32_t* m_ColorBuffer;
-	uint16_t* m_IndexBuffer;
+	Stroker(bx::AllocatorHandle allocator)
+		: m_PosBuffer(allocator)
+		, m_ColorBuffer(allocator)
+		, m_IndexBuffer(allocator)
+		, m_NumVertices(0)
+		, m_NumIndices(0)
+		, m_Tesselator(nullptr)
+		, m_libTessAllocator(allocator)
+		, m_FringeWidth(1.0f)
+		, m_Scale(1.0f)
+		, m_TesselationTolerance(0.25f)
+	{
+	}
+
+	bx::ArrayT<Vec2> m_PosBuffer; // Storage, m_NumVertices in use.
+	bx::ArrayT<uint32_t> m_ColorBuffer; // Storage, as many as m_PosBuffer.
+	bx::ArrayT<uint16_t> m_IndexBuffer; // Storage, m_NumIndices in use.
 	uint32_t m_NumVertices;
 	uint32_t m_NumIndices;
-	uint32_t m_VertexCapacity;
-	uint32_t m_IndexCapacity;
 	TESStesselator* m_Tesselator;
 	libtess2Allocator m_libTessAllocator;
 	float m_FringeWidth;
@@ -291,37 +310,20 @@ static void addPosColor(Stroker* stroker, const Vec2* srcPos, const uint32_t* sr
 template<uint32_t N>
 static void addIndices(Stroker* stroker, const uint16_t* src);
 
-Stroker* createStroker(bx::AllocatorI* allocator)
+Stroker* createStroker(bx::AllocatorHandle allocator)
 {
-	Stroker* stroker = (Stroker*)bx::alloc(allocator, sizeof(Stroker));
-	bx::memSet(stroker, 0, sizeof(Stroker));
-	stroker->m_Allocator = allocator;
-	stroker->m_FringeWidth = 1.0f;
-	stroker->m_Scale = 1.0f;
-	stroker->m_TesselationTolerance = 0.25f;
-	return stroker;
+	return BX_NEW_PTR(bx::getAllocator(allocator), Stroker)(allocator);
 }
 
 void destroyStroker(Stroker* stroker)
 {
-	bx::AllocatorI* allocator = stroker->m_Allocator;
-
-	bx::alignedFree(allocator, stroker->m_PosBuffer, 16);
-	bx::alignedFree(allocator, stroker->m_ColorBuffer, 16);
-	bx::alignedFree(allocator, stroker->m_IndexBuffer, 16);
-
 	if (stroker->m_Tesselator) {
 		tessDeleteTess(stroker->m_Tesselator);
 	}
 
 	libtess2Reset(&stroker->m_libTessAllocator);
 
-	if (stroker->m_libTessAllocator.m_Buffer) {
-		bx::alignedFree(allocator, stroker->m_libTessAllocator.m_Buffer, 16);
-		stroker->m_libTessAllocator.m_Buffer = nullptr;
-	}
-
-	bx::free(allocator, stroker);
+	bx::deletePtr(stroker);
 }
 
 void strokerReset(Stroker* stroker, float scale, float tesselationTolerance, float fringeWidth)
@@ -360,7 +362,7 @@ void strokerConvexFill(Stroker* stroker, Mesh* mesh, const float* vertexList, ui
 	{
 		expandIB(stroker, numIndices);
 
-		uint16_t* dstIndex = stroker->m_IndexBuffer;
+		uint16_t* dstIndex = stroker->m_IndexBuffer.getPtr();
 		uint16_t nextID = 1;
 
 		uint32_t n = numTris;
@@ -377,7 +379,7 @@ void strokerConvexFill(Stroker* stroker, Mesh* mesh, const float* vertexList, ui
 
 	mesh->posBuffer = vertexList;
 	mesh->colorBuffer = nullptr;
-	mesh->indexBuffer = stroker->m_IndexBuffer;
+	mesh->indexBuffer = stroker->m_IndexBuffer.getPtr();
 	mesh->numVertices = numVertices;
 	mesh->numIndices = stroker->m_NumIndices;
 }
@@ -418,7 +420,7 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 		bx::simd128_t p1  = vtx0;
 
 		const float* srcPos = vertexList + 2;
-		float* dstPos = &stroker->m_PosBuffer->x;
+		float* dstPos = &stroker->m_PosBuffer.getPtr()->x;
 
 		const bx::simd128_t xmm_epsilon = bx::simd128_splat(VG_EPSILON);
 		const bx::simd128_t vec2x2_perpCCW_xorMask = bx::simd128_ld(0x80000000u, 0u, 0x80000000u, 0u);
@@ -641,7 +643,7 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 		}
 
 		const uint32_t colors[2] = { color, c0 };
-		vgutil::memset64(stroker->m_ColorBuffer, numVertices, &colors[0]);
+		vgutil::memset64(stroker->m_ColorBuffer.getPtr(), numVertices, &colors[0]);
 
 		stroker->m_NumVertices += numDrawVertices;
 	}
@@ -650,7 +652,7 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 	{
 		expandIB(stroker, numDrawIndices);
 
-		uint16_t* dstIndex = stroker->m_IndexBuffer;
+		uint16_t* dstIndex = stroker->m_IndexBuffer.getPtr();
 
 		// First fringe quad
 		dstIndex[0] = 0; dstIndex[1] = 1; dstIndex[2] = 3;
@@ -743,9 +745,9 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 		stroker->m_NumIndices += numDrawIndices;
 	}
 
-	mesh->posBuffer = &stroker->m_PosBuffer[0].x;
-	mesh->colorBuffer = stroker->m_ColorBuffer;
-	mesh->indexBuffer = stroker->m_IndexBuffer;
+	mesh->posBuffer = &stroker->m_PosBuffer.getPtr(0)->x;
+	mesh->colorBuffer = stroker->m_ColorBuffer.getPtr();
+	mesh->indexBuffer = stroker->m_IndexBuffer.getPtr();
 	mesh->numVertices = stroker->m_NumVertices;
 	mesh->numIndices = stroker->m_NumIndices;
 }
@@ -777,7 +779,7 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 
 		Vec2 d01 = vec2Dir(vtx[numVertices - 1], vtx[0]);
 
-		Vec2* dstPos = stroker->m_PosBuffer;
+		Vec2* dstPos = stroker->m_PosBuffer.getPtr();
 		for (uint32_t iSegment = 0; iSegment < numVertices; ++iSegment) {
 			const Vec2& p1 = vtx[iSegment];
 			const Vec2& p2 = vtx[iSegment == numVertices - 1 ? 0 : iSegment + 1];
@@ -794,7 +796,7 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 		}
 
 		const uint32_t colors[2] = { color, c0 };
-		vgutil::memset64(stroker->m_ColorBuffer, numVertices, &colors[0]);
+		vgutil::memset64(stroker->m_ColorBuffer.getPtr(), numVertices, &colors[0]);
 
 		stroker->m_NumVertices += numDrawVertices;
 	}
@@ -803,7 +805,7 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 	{
 		expandIB(stroker, numDrawIndices);
 
-		uint16_t* dstIndex = stroker->m_IndexBuffer;
+		uint16_t* dstIndex = stroker->m_IndexBuffer.getPtr();
 
 		// Generate the triangle fan (original polygon)
 		const uint32_t numFanTris = numVertices - 2;
@@ -838,9 +840,9 @@ void strokerConvexFillAA(Stroker* stroker, Mesh* mesh, const float* vertexList, 
 		stroker->m_NumIndices += numDrawIndices;
 	}
 
-	mesh->posBuffer = &stroker->m_PosBuffer[0].x;
-	mesh->colorBuffer = stroker->m_ColorBuffer;
-	mesh->indexBuffer = stroker->m_IndexBuffer;
+	mesh->posBuffer = &stroker->m_PosBuffer.getPtr(0)->x;
+	mesh->colorBuffer = stroker->m_ColorBuffer.getPtr();
+	mesh->indexBuffer = stroker->m_IndexBuffer.getPtr();
 	mesh->numVertices = stroker->m_NumVertices;
 	mesh->numIndices = stroker->m_NumIndices;
 }
@@ -855,10 +857,8 @@ bool strokerConcaveFillBegin(Stroker* stroker)
 
 #if VG_CONFIG_LIBTESS2_SCRATCH_BUFFER
 	// Initialize the allocator once
-	if (!stroker->m_libTessAllocator.m_Buffer) {
-		stroker->m_libTessAllocator.m_Allocator = stroker->m_Allocator;
-		stroker->m_libTessAllocator.m_Capacity = VG_CONFIG_LIBTESS2_SCRATCH_BUFFER;
-		stroker->m_libTessAllocator.m_Buffer = (uint8_t*)bx::alignedAlloc(stroker->m_Allocator, stroker->m_libTessAllocator.m_Capacity, 16);
+	if (stroker->m_libTessAllocator.m_Buffer.getCount() == 0) {
+		stroker->m_libTessAllocator.m_Buffer.setCount(VG_CONFIG_LIBTESS2_SCRATCH_BUFFER, bx::InitNone);
 	}
 
 	// Reset the allocator.
@@ -938,8 +938,8 @@ bool strokerConcaveFillEndAA(Stroker* stroker, Mesh* mesh, uint32_t color, FillR
 			const float aa = stroker->m_FringeWidth * 0.5f * crossSign;
 			const uint32_t inner = crossSign < 0 ? 0 : 1;
 
-			Vec2* dstPos = &stroker->m_PosBuffer[nextVertexID];
-			Color* dstColor = &stroker->m_ColorBuffer[nextVertexID];
+			Vec2* dstPos = stroker->m_PosBuffer.getPtr(nextVertexID);
+			Color* dstColor = stroker->m_ColorBuffer.getPtr(nextVertexID);
 			for (uint32_t iSegment = 0; iSegment < numContourVertices; ++iSegment) {
 				const Vec2& p1 = vtx[iSegment];
 				const Vec2& p2 = vtx[iSegment == (uint32_t)(numContourVertices - 1) ? 0 : iSegment + 1];
@@ -971,7 +971,7 @@ bool strokerConcaveFillEndAA(Stroker* stroker, Mesh* mesh, uint32_t color, FillR
 		// Indices
 		expandIB(stroker, numContourVertices * 6);
 		{
-			uint16_t* dstIndex = &stroker->m_IndexBuffer[nextIndexID];
+			uint16_t* dstIndex = stroker->m_IndexBuffer.getPtr(nextIndexID);
 
 			const uint32_t numSegments = numContourVertices - 1;
 			for (uint32_t iSegment = 0; iSegment < numSegments; ++iSegment) {
@@ -1022,21 +1022,21 @@ bool strokerConcaveFillEndAA(Stroker* stroker, Mesh* mesh, uint32_t color, FillR
 	expandVB(stroker, numTessVertices);
 	{
 		const float* tessVertices = tessGetVertices(stroker->m_Tesselator);
-		bx::memCopy(&stroker->m_PosBuffer[nextVertexID], tessVertices, sizeof(Vec2) * numTessVertices);
-		vgutil::memset32(&stroker->m_ColorBuffer[nextVertexID], numTessVertices, &color);
+		bx::memCopy(stroker->m_PosBuffer.getPtr(nextVertexID), tessVertices, sizeof(Vec2) * numTessVertices);
+		vgutil::memset32(stroker->m_ColorBuffer.getPtr(nextVertexID), numTessVertices, &color);
 		stroker->m_NumVertices += numTessVertices;
 	}
 
 	const uint32_t numTessIndices = tessGetElementCount(stroker->m_Tesselator) * 3;
 	expandIB(stroker, numTessIndices);
 	{
-		vgutil::batchTransformDrawIndices(tessGetElements(stroker->m_Tesselator), numTessIndices, &stroker->m_IndexBuffer[nextIndexID], (uint16_t)nextVertexID);
+		vgutil::batchTransformDrawIndices(tessGetElements(stroker->m_Tesselator), numTessIndices, stroker->m_IndexBuffer.getPtr(nextIndexID), (uint16_t)nextVertexID);
 		stroker->m_NumIndices += numTessIndices;
 	}
 
-	mesh->posBuffer = &stroker->m_PosBuffer[0].x;
-	mesh->colorBuffer = stroker->m_ColorBuffer;
-	mesh->indexBuffer = stroker->m_IndexBuffer;
+	mesh->posBuffer = &stroker->m_PosBuffer.getPtr(0)->x;
+	mesh->colorBuffer = stroker->m_ColorBuffer.getPtr();
+	mesh->indexBuffer = stroker->m_IndexBuffer.getPtr();
 	mesh->numVertices = stroker->m_NumVertices;
 	mesh->numIndices = stroker->m_NumIndices;
 
@@ -1420,9 +1420,9 @@ void polylineStroke(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t numP
 		addIndices<6>(stroker, &id[0]);
 	}
 
-	mesh->posBuffer = &stroker->m_PosBuffer[0].x;
+	mesh->posBuffer = &stroker->m_PosBuffer.getPtr(0)->x;
 	mesh->colorBuffer = nullptr;
-	mesh->indexBuffer = stroker->m_IndexBuffer;
+	mesh->indexBuffer = stroker->m_IndexBuffer.getPtr();
 	mesh->numVertices = stroker->m_NumVertices;
 	mesh->numIndices = stroker->m_NumIndices;
 }
@@ -2022,9 +2022,9 @@ void polylineStrokeAA(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_t nu
 		addIndices<18>(stroker, &id[0]);
 	}
 
-	mesh->posBuffer = &stroker->m_PosBuffer[0].x;
-	mesh->colorBuffer = stroker->m_ColorBuffer;
-	mesh->indexBuffer = stroker->m_IndexBuffer;
+	mesh->posBuffer = &stroker->m_PosBuffer.getPtr(0)->x;
+	mesh->colorBuffer = stroker->m_ColorBuffer.getPtr();
+	mesh->indexBuffer = stroker->m_IndexBuffer.getPtr();
 	mesh->numVertices = stroker->m_NumVertices;
 	mesh->numIndices = stroker->m_NumIndices;
 }
@@ -2345,9 +2345,9 @@ void polylineStrokeAAThin(Stroker* stroker, Mesh* mesh, const Vec2* vtx, uint32_
 		addIndices<12>(stroker, id);
 	}
 
-	mesh->posBuffer = &stroker->m_PosBuffer[0].x;
-	mesh->colorBuffer = stroker->m_ColorBuffer;
-	mesh->indexBuffer = stroker->m_IndexBuffer;
+	mesh->posBuffer = &stroker->m_PosBuffer.getPtr(0)->x;
+	mesh->colorBuffer = stroker->m_ColorBuffer.getPtr();
+	mesh->indexBuffer = stroker->m_IndexBuffer.getPtr();
 	mesh->numVertices = stroker->m_NumVertices;
 	mesh->numIndices = stroker->m_NumIndices;
 }
@@ -2360,27 +2360,26 @@ inline static void resetGeometry(Stroker* stroker)
 
 static void reallocVB(Stroker* stroker, uint32_t n)
 {
-	stroker->m_VertexCapacity += n;
-	stroker->m_PosBuffer = (Vec2*)bx::alignedRealloc(stroker->m_Allocator, stroker->m_PosBuffer, sizeof(Vec2) * stroker->m_VertexCapacity, 16);
-	stroker->m_ColorBuffer = (uint32_t*)bx::alignedRealloc(stroker->m_Allocator, stroker->m_ColorBuffer, sizeof(uint32_t) * stroker->m_VertexCapacity, 16);
+	const uint32_t capacity = stroker->m_PosBuffer.getCount() + n;
+	stroker->m_PosBuffer.setCount(capacity, bx::InitNone);
+	stroker->m_ColorBuffer.setCount(capacity, bx::InitNone);
 }
 
 static BX_FORCE_INLINE void expandVB(Stroker* stroker, uint32_t n)
 {
-	if (stroker->m_NumVertices + n > stroker->m_VertexCapacity) {
+	if (stroker->m_NumVertices + n > stroker->m_PosBuffer.getCount()) {
 		reallocVB(stroker, n);
 	}
 }
 
 static void reallocIB(Stroker* stroker, uint32_t n)
 {
-	stroker->m_IndexCapacity += n;
-	stroker->m_IndexBuffer = (uint16_t*)bx::alignedRealloc(stroker->m_Allocator, stroker->m_IndexBuffer, sizeof(uint16_t) * stroker->m_IndexCapacity, 16);
+	stroker->m_IndexBuffer.setCount(stroker->m_IndexBuffer.getCount() + n, bx::InitNone);
 }
 
 static BX_FORCE_INLINE void expandIB(Stroker* stroker, uint32_t n)
 {
-	if (stroker->m_NumIndices + n > stroker->m_IndexCapacity) {
+	if (stroker->m_NumIndices + n > stroker->m_IndexBuffer.getCount()) {
 		reallocIB(stroker, n);
 	}
 }
@@ -2388,9 +2387,9 @@ static BX_FORCE_INLINE void expandIB(Stroker* stroker, uint32_t n)
 template<uint32_t N>
 static void addPos(Stroker* stroker, const Vec2* srcPos)
 {
-	VG_CHECK(stroker->m_NumVertices + N <= stroker->m_VertexCapacity, "Not enough free space for temporary geometry");
+	VG_CHECK(stroker->m_NumVertices + N <= stroker->m_PosBuffer.getCount(), "Not enough free space for temporary geometry");
 
-	float* dstPos = &stroker->m_PosBuffer[stroker->m_NumVertices].x;
+	float* dstPos = &stroker->m_PosBuffer.getPtr(stroker->m_NumVertices)->x;
 	memcpy(dstPos, srcPos, sizeof(Vec2) * N);
 
 	stroker->m_NumVertices += N;
@@ -2399,12 +2398,12 @@ static void addPos(Stroker* stroker, const Vec2* srcPos)
 template<uint32_t N>
 static void addPosColor(Stroker* stroker, const Vec2* srcPos, const uint32_t* srcColor)
 {
-	VG_CHECK(stroker->m_NumVertices + N <= stroker->m_VertexCapacity, "Not enough free space for temporary geometry");
+	VG_CHECK(stroker->m_NumVertices + N <= stroker->m_PosBuffer.getCount(), "Not enough free space for temporary geometry");
 
-	float* dstPos = &stroker->m_PosBuffer[stroker->m_NumVertices].x;
+	float* dstPos = &stroker->m_PosBuffer.getPtr(stroker->m_NumVertices)->x;
 	memcpy(dstPos, srcPos, sizeof(Vec2) * N);
 
-	uint32_t* dstColor = &stroker->m_ColorBuffer[stroker->m_NumVertices];
+	uint32_t* dstColor = stroker->m_ColorBuffer.getPtr(stroker->m_NumVertices);
 	memcpy(dstColor, srcColor, sizeof(uint32_t) * N);
 
 	stroker->m_NumVertices += N;
@@ -2413,9 +2412,9 @@ static void addPosColor(Stroker* stroker, const Vec2* srcPos, const uint32_t* sr
 template<uint32_t N>
 static void addIndices(Stroker* stroker, const uint16_t* src)
 {
-	VG_CHECK(stroker->m_NumIndices + N <= stroker->m_IndexCapacity, "Not enough free space for temporary geometry");
+	VG_CHECK(stroker->m_NumIndices + N <= stroker->m_IndexBuffer.getCount(), "Not enough free space for temporary geometry");
 
-	uint16_t* dst = &stroker->m_IndexBuffer[stroker->m_NumIndices];
+	uint16_t* dst = stroker->m_IndexBuffer.getPtr(stroker->m_NumIndices);
 	memcpy(dst, src, sizeof(uint16_t) * N);
 
 	stroker->m_NumIndices += N;

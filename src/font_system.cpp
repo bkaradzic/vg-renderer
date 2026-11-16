@@ -10,7 +10,8 @@
 #include "font_system.h"
 #include "config.h"
 #include "vg_util.h"
-#include <bx/allocator.h>
+#include <bx/array.h>
+#include <bx/blk.h>
 #include <bx/string.h>
 
 #define FS_CONFIG_LUT_SIZE           1024
@@ -42,10 +43,16 @@ struct AtlasNode
 
 struct Atlas
 {
-	bx::AllocatorI* m_Allocator;
-	AtlasNode* m_Nodes;
+	Atlas(bx::AllocatorHandle allocator, uint16_t w, uint16_t h)
+		: m_Nodes(allocator)
+		, m_NumNodes(0)
+		, m_Width(w)
+		, m_Height(h)
+	{
+	}
+
+	bx::ArrayT<AtlasNode> m_Nodes; // Storage, m_NumNodes in use.
 	uint32_t m_NumNodes;
-	uint32_t m_NodeCapacity;
 	uint16_t m_Width;
 	uint16_t m_Height;
 };
@@ -62,25 +69,24 @@ struct Glyph
 
 struct Font
 {
-	uint8_t* m_Data;
-	uint32_t m_DataSize;
-	uint32_t m_Flags;
-	void* m_BackendData;
-	Glyph* m_Glyphs;
-	uint32_t m_GlyphCapacity;
-	uint32_t m_NumGlyphs;
-	int32_t m_LUT[FS_CONFIG_LUT_SIZE];
-	FontHandle m_Fallback[FS_CONFIG_MAX_FALLBACK_FONTS];
-	uint32_t m_NumFallbacks;
-	float m_Ascender;
-	float m_Descender;
-	float m_LineHeight;
-	char m_Name[64];
+	uint8_t* m_Data = nullptr; // Owned unless FontFlags::DontCopyData.
+	uint32_t m_DataSize = 0;
+	uint32_t m_Flags = 0;
+	void* m_BackendData = nullptr;
+	bx::ArrayT<Glyph> m_Glyphs; // Storage, m_NumGlyphs in use.
+	uint32_t m_NumGlyphs = 0;
+	int32_t m_LUT[FS_CONFIG_LUT_SIZE] = {};
+	FontHandle m_Fallback[FS_CONFIG_MAX_FALLBACK_FONTS] = {};
+	uint32_t m_NumFallbacks = 0;
+	float m_Ascender = 0.0f;
+	float m_Descender = 0.0f;
+	float m_LineHeight = 0.0f;
+	char m_Name[64] = {};
 };
 
 struct TextBuffer
 {
-	uint8_t* m_Buffer;
+	bx::ArrayT<uint8_t> m_Buffer;
 	uint32_t m_Size;
 	uint32_t m_Capacity;
 
@@ -94,17 +100,17 @@ struct TextBuffer
 
 struct FontSystem
 {
-	bx::AllocatorI* m_Allocator;
+	bx::AllocatorHandle m_Allocator;
+	bx::AllocatorBlkI* m_AllocatorBlk;
 	Atlas* m_Atlas;
-	Font* m_Fonts;
-	uint8_t* m_ImageData;
+	bx::ArrayT<Font> m_Fonts; // Storage, m_NumFonts in use.
+	bx::ArrayT<uint8_t> m_ImageData;
 	FontSystemConfig m_Config;
 	TextBuffer m_TextBuffer;
 	ImageHandle m_FontImages[FS_CONFIG_MAX_FONT_IMAGES];
 	uint32_t m_FontImageID;
 	uv_t m_FontImageWhitePixelUV[2];
 	uint32_t m_NumFonts;
-	uint32_t m_FontCapacity;
 	uint32_t m_AtlasID;
 	uint16_t m_DirtyRect[4]; // { minx, miny, maxx, maxy }
 };
@@ -113,7 +119,7 @@ static bool fsAddWhiteRect(FontSystem* fs, uint16_t rectWidth, uint16_t rectHeig
 static void fsInvalidateRect(FontSystem* fs, uint16_t minX, uint16_t minY, uint16_t maxX, uint16_t maxY);
 static FontHandle fsAllocFont(FontSystem* fs);
 static bool fsResetAtlas(FontSystem* fs, uint16_t width, uint16_t height);
-static Atlas* fsCreateAtlas(bx::AllocatorI* allocator, uint16_t w, uint16_t h);
+static Atlas* fsCreateAtlas(bx::AllocatorHandle allocator, uint16_t w, uint16_t h);
 static void fsDestroyAtlas(Atlas* atlas);
 static uint32_t fsAtlasAllocNode(Atlas* atlas);
 static void fsAtlasSetNode(Atlas* atlas, uint32_t nodeID, uint16_t x, uint16_t y, uint16_t w);
@@ -126,10 +132,9 @@ static void fsAtlasReset(Atlas* atlas, uint16_t w, uint16_t h);
 static uint32_t decodeUTF8(uint32_t* state, uint32_t* codep, uint8_t byte);
 static void fsUpdateWhitePixelUV(FontSystem* fs, vg::Context* ctx);
 static uint32_t fsTextBuildMesh(FontSystem* fs, TextBuffer* tb, vg::Context* ctx, const vg::TextConfig& cfg, uint32_t flags, TextMesh* mesh);
-static void fsTextBufferInit(TextBuffer* tb);
-static void fsTextBufferShutdown(TextBuffer* tb, bx::AllocatorI* allocator);
-static bool fsTextBufferReset(TextBuffer* tb, uint32_t capacity, bx::AllocatorI* allocator);
-static bool fsTextBufferPushCodepoint(TextBuffer* tb, uint32_t codepoint, uint8_t codepointSize, bx::AllocatorI* allocator);
+static void fsTextBufferInit(TextBuffer* tb, bx::AllocatorHandle allocator);
+static bool fsTextBufferReset(TextBuffer* tb, uint32_t capacity);
+static bool fsTextBufferPushCodepoint(TextBuffer* tb, uint32_t codepoint, uint8_t codepointSize);
 static float fsGetVertAlign(FontSystem* fs, const Font* font, uint32_t align, int16_t isize);
 static Glyph* fsBakeGlyph(FontSystem* fs, Font* font, int32_t glyphIndex, uint32_t codepoint, int16_t isize, int16_t iblur, bool glyphBitmapOptional);
 static Glyph* fsAllocGlyph(FontSystem* fs, Font* font);
@@ -145,15 +150,13 @@ static bool fsBackendBuildGlyphBitmap(void* fontPtr, int32_t glyph, float size, 
 static void fsBackendRenderGlyphBitmap(void* fontPtr, uint8_t* output, int32_t outWidth, int32_t outHeight, int32_t outStride, float scaleX, float scaleY, int glyph);
 static int32_t fsBackendGetGlyphKernAdvance(void* fontPtr, int32_t glyph1, int32_t glyph2);
 
-FontSystem* fsCreate(vg::Context* ctx, bx::AllocatorI* allocator, const FontSystemConfig* cfg)
+FontSystem* fsCreate(vg::Context* ctx, bx::AllocatorHandle allocator, const FontSystemConfig* cfg)
 {
-	FontSystem* fs = (FontSystem*)bx::alloc(allocator, sizeof(FontSystem));
-	if (!fs) {
-		return nullptr;
-	}
-
-	bx::memSet(fs, 0, sizeof(FontSystem));
+	FontSystem* fs = BX_NEW_PTR(bx::getAllocator(allocator), FontSystem)();
 	fs->m_Allocator = allocator;
+	fs->m_AllocatorBlk = bx::getAllocator(allocator);
+	fs->m_Fonts = bx::ArrayT<Font>(allocator);
+	fs->m_ImageData = bx::ArrayT<uint8_t>(allocator);
 	bx::memCopy(&fs->m_Config, cfg, sizeof(FontSystemConfig));
 
 	fsBackendInit(fs);
@@ -167,12 +170,7 @@ FontSystem* fsCreate(vg::Context* ctx, bx::AllocatorI* allocator, const FontSyst
 	fs->m_AtlasID = 1;
 
 	// Initialize image data
-	fs->m_ImageData = (uint8_t*)bx::alloc(allocator, (size_t)cfg->m_AtlasWidth * (size_t)cfg->m_AtlasHeight);
-	if (!fs->m_ImageData) {
-		fsDestroy(fs, ctx);
-		return nullptr;
-	}
-	bx::memSet(fs->m_ImageData, 0, (size_t)cfg->m_AtlasWidth * (size_t)cfg->m_AtlasHeight);
+	fs->m_ImageData.setCount((uint32_t)cfg->m_AtlasWidth * (uint32_t)cfg->m_AtlasHeight);
 
 	// Initialize dirty rect (mark whole texture as dirty to
 	// force the renderer to update the texture)
@@ -195,7 +193,7 @@ FontSystem* fsCreate(vg::Context* ctx, bx::AllocatorI* allocator, const FontSyst
 	fs->m_FontImageID = 0;
 
 	fsUpdateWhitePixelUV(fs, ctx);
-	fsTextBufferInit(&fs->m_TextBuffer);
+	fsTextBufferInit(&fs->m_TextBuffer, allocator);
 
 	return fs;
 }
@@ -203,9 +201,6 @@ FontSystem* fsCreate(vg::Context* ctx, bx::AllocatorI* allocator, const FontSyst
 void fsDestroy(FontSystem* fs, vg::Context* ctx)
 {
 	BX_UNUSED(ctx);
-	bx::AllocatorI* allocator = fs->m_Allocator;
-
-	fsTextBufferShutdown(&fs->m_TextBuffer, allocator);
 
 	for (uint32_t i = 0; i < FS_CONFIG_MAX_FONT_IMAGES; ++i) {
 		destroyImage(fs->m_FontImages[i]);
@@ -213,22 +208,19 @@ void fsDestroy(FontSystem* fs, vg::Context* ctx)
 
 	const uint32_t numFonts = fs->m_NumFonts;
 	for (uint32_t i = 0; i < numFonts; ++i) {
-		Font* font = &fs->m_Fonts[i];
+		Font* font = fs->m_Fonts.getPtr(i);
 		fsBackendFreeFont(fs, font->m_BackendData);
 
 		if ((font->m_Flags & FontFlags::DontCopyData) == 0) {
-			bx::free(allocator, font->m_Data);
+			bx::freePtr(font->m_Data);
 		}
-
-		bx::free(allocator, font->m_Glyphs);
 	}
-	bx::free(allocator, fs->m_Fonts);
 
-	bx::free(allocator, fs->m_ImageData);
+	if (fs->m_Atlas) {
+		fsDestroyAtlas(fs->m_Atlas);
+	}
 
-	fsDestroyAtlas(fs->m_Atlas);
-
-	bx::free(allocator, fs);
+	bx::deletePtr(fs);
 }
 
 void fsFrame(FontSystem* fs, vg::Context* ctx)
@@ -274,7 +266,7 @@ FontHandle fsAddFont(FontSystem* fs, const char* name, uint8_t* data, uint32_t d
 	uint8_t* fontData = nullptr;
 	const bool copyData = (fontFlags & FontFlags::DontCopyData) == 0;
 	if (copyData) {
-		fontData = (uint8_t*)bx::alloc(fs->m_Allocator, dataSize);
+		fontData = (uint8_t*)bx::allocPtr(fs->m_AllocatorBlk, dataSize);
 		if (!fontData) {
 			return VG_INVALID_HANDLE;
 		}
@@ -289,7 +281,7 @@ FontHandle fsAddFont(FontSystem* fs, const char* name, uint8_t* data, uint32_t d
 		return VG_INVALID_HANDLE;
 	}
 
-	Font* font = &fs->m_Fonts[handle.idx];
+	Font* font = fs->m_Fonts.getPtr(handle.idx);
 	bx::snprintf(font->m_Name, BX_COUNTOF(font->m_Name), "%s", name);
 
 	// Read in the font data.
@@ -329,7 +321,7 @@ FontHandle fsFindFont(const FontSystem* fs, const char* name)
 
 bool fsAddFallbackFont(FontSystem* fs, FontHandle baseFontHandle, FontHandle fallbackFontHandle)
 {
-	Font* baseFont = &fs->m_Fonts[baseFontHandle.idx];
+	Font* baseFont = fs->m_Fonts.getPtr(baseFontHandle.idx);
 	if (baseFont->m_NumFallbacks < FS_CONFIG_MAX_FALLBACK_FONTS) {
 		baseFont->m_Fallback[baseFont->m_NumFallbacks] = fallbackFontHandle;
 		++baseFont->m_NumFallbacks;
@@ -366,7 +358,7 @@ const uint8_t* fsGetImageData(const FontSystem* fs, uint16_t* imageSize)
 		imageSize[1] = fs->m_Atlas->m_Height;
 	}
 
-	return fs->m_ImageData;
+	return fs->m_ImageData.getPtr();
 }
 
 const uv_t* fsGetWhitePixelUV(const FontSystem* fs)
@@ -397,12 +389,11 @@ void fsFlushFontAtlasImage(FontSystem* fs, vg::Context* ctx)
 	const uint8_t* a8Data = fsGetImageData(fs, &imgSize[0]);
 
 	// TODO: Convert only the dirty part of the texture (it's the only part that will be uploaded to the backend)
-	uint32_t* rgbaData = (uint32_t*)bx::alloc(fs->m_Allocator, sizeof(uint32_t) * imgSize[0] * imgSize[1]);
-	vgutil::convertA8_to_RGBA8(rgbaData, a8Data, (uint32_t)imgSize[0], (uint32_t)imgSize[1], 0x00FFFFFF);
+	bx::ArrayT<uint32_t> rgbaData(fs->m_Allocator);
+	rgbaData.setCount((uint32_t)imgSize[0] * (uint32_t)imgSize[1], bx::InitNone);
+	vgutil::convertA8_to_RGBA8(rgbaData.getPtr(), a8Data, (uint32_t)imgSize[0], (uint32_t)imgSize[1], 0x00FFFFFF);
 
-	vg::updateImage(fontImage, dirtyRect[0], dirtyRect[1], dirtyRect[2] - dirtyRect[0], dirtyRect[3] - dirtyRect[1], (const uint8_t*)rgbaData);
-
-	bx::free(fs->m_Allocator, rgbaData);
+	vg::updateImage(fontImage, dirtyRect[0], dirtyRect[1], dirtyRect[2] - dirtyRect[0], dirtyRect[3] - dirtyRect[1], (const uint8_t*)rgbaData.getPtr() );
 }
 
 uint32_t fsText(FontSystem* fs, vg::Context* ctx, const vg::TextConfig& cfg, const char* str, uint32_t len, uint32_t flags, TextMesh* mesh)
@@ -421,7 +412,7 @@ uint32_t fsText(FontSystem* fs, vg::Context* ctx, const vg::TextConfig& cfg, con
 	}
 
 	TextBuffer* tb = &fs->m_TextBuffer;
-	if (!fsTextBufferReset(tb, len, fs->m_Allocator)) {
+	if (!fsTextBufferReset(tb, len)) {
 		return 0; // Failed to allocate enough memory for text buffer.
 	}
 
@@ -460,7 +451,7 @@ static uint32_t fsTextBuildMesh(FontSystem* fs, TextBuffer* tb, vg::Context* ctx
 	// Find glyph indices for each codepoint
 	{
 		const vg::FontHandle fontHandle = cfg.fontHandle;
-		Font* font = &fs->m_Fonts[fontHandle.idx];
+		Font* font = fs->m_Fonts.getPtr(fontHandle.idx);
 		for (uint32_t i = 0; i < numCodepoints; ++i) {
 			// Replace tabs with spaces. The same check is done below when deciding the width of the glyph.
 			// Tabs are stretched spaces.
@@ -514,7 +505,7 @@ static uint32_t fsTextBuildMesh(FontSystem* fs, TextBuffer* tb, vg::Context* ctx
 	float minx = 0.0f, maxx = 0.0f;
 	float miny = 0.0f, maxy = 0.0f;
 	{
-		const Font* font = &fs->m_Fonts[cfg.fontHandle.idx];
+		const Font* font = fs->m_Fonts.getPtr(cfg.fontHandle.idx);
 		const bool originTopLeft = (fs->m_Config.m_Flags & FontSystemFlags::Origin_Msk) == FontSystemFlags::Origin_TopLeft;
 		const float y_mult = originTopLeft ? 1.0f : -1.0f;
 		const uint32_t bboxMinYID = originTopLeft ? 1 : 3;
@@ -537,7 +528,7 @@ static uint32_t fsTextBuildMesh(FontSystem* fs, TextBuffer* tb, vg::Context* ctx
 			const int32_t glyphIndex = tb->m_GlyphIndices[i];
 			const uint32_t codepoint = tb->m_Codepoints[i];
 
-			Glyph* glyph = fsBakeGlyph(fs, &fs->m_Fonts[glyphFont.idx], glyphIndex, codepoint, isize, iblur, bitmapsOptional);
+			Glyph* glyph = fsBakeGlyph(fs, fs->m_Fonts.getPtr(glyphFont.idx), glyphIndex, codepoint, isize, iblur, bitmapsOptional);
 			if (!glyph) {
 				if (!fsAllocTextAtlas(fs, ctx)) {
 					VG_WARN(false, "Failed to allocate enough text atlas space for string");
@@ -576,7 +567,7 @@ static uint32_t fsTextBuildMesh(FontSystem* fs, TextBuffer* tb, vg::Context* ctx
 				q->m_Pos[3] = ry + (atlasMaxY - atlasMinY) * y_mult;
 
 				if (glyphFont.idx != cfg.fontHandle.idx) {
-					const Font* fallbackFont = &fs->m_Fonts[glyphFont.idx];
+					const Font* fallbackFont = fs->m_Fonts.getPtr(glyphFont.idx);
 					const float deltaY = (fallbackFont->m_Descender - font->m_Descender) * cfg.fontSize * y_mult;
 					q->m_Pos[1] += deltaY;
 					q->m_Pos[3] += deltaY;
@@ -618,7 +609,7 @@ static uint32_t fsTextBuildMesh(FontSystem* fs, TextBuffer* tb, vg::Context* ctx
 		break;
 	}
 
-	const float dy = fsGetVertAlign(fs, &fs->m_Fonts[cfg.fontHandle.idx], cfg.alignment, isize);
+	const float dy = fsGetVertAlign(fs, fs->m_Fonts.getPtr(cfg.fontHandle.idx), cfg.alignment, isize);
 
 	mesh->m_Alignment[0] = dx;
 	mesh->m_Alignment[1] = dy;
@@ -637,7 +628,7 @@ static uint32_t fsTextBuildMesh(FontSystem* fs, TextBuffer* tb, vg::Context* ctx
 
 float fsGetLineHeight(FontSystem* fs, const vg::TextConfig& cfg)
 {
-	const Font* font = &fs->m_Fonts[cfg.fontHandle.idx];
+	const Font* font = fs->m_Fonts.getPtr(cfg.fontHandle.idx);
 	return font->m_LineHeight * (float)((int32_t)(cfg.fontSize * 10.0f)) / 10.0f;
 }
 
@@ -681,7 +672,7 @@ uint32_t fsTextBreakLines(FontSystem* fs, const vg::TextConfig& cfg, const char*
 	// the line and try to fit as many characters/words possible to each row.
 	TextBuffer* tb = &fs->m_TextBuffer;
 
-	if (!fsTextBufferReset(tb, 0, fs->m_Allocator)) {
+	if (!fsTextBufferReset(tb, 0)) {
 		return 0;
 	}
 
@@ -830,11 +821,11 @@ uint32_t fsTextBreakLines(FontSystem* fs, const vg::TextConfig& cfg, const char*
 			}
 
 			// Reset text buffer
-			if (!fsTextBufferReset(tb, 0, fs->m_Allocator)) {
+			if (!fsTextBufferReset(tb, 0)) {
 				return 0;
 			}
 		} else {
-			if (!fsTextBufferPushCodepoint(tb, codepoint, (uint8_t)(nextCursor - cursor), fs->m_Allocator)) {
+			if (!fsTextBufferPushCodepoint(tb, codepoint, (uint8_t)(nextCursor - cursor) )) {
 				return 0; // Failed to add codepoint to text buffer
 			}
 		}
@@ -848,7 +839,7 @@ uint32_t fsTextBreakLines(FontSystem* fs, const vg::TextConfig& cfg, const char*
 
 void fsLineBounds(FontSystem* fs, const vg::TextConfig& cfg, float y, float* miny, float* maxy)
 {
-	const Font* font = &fs->m_Fonts[cfg.fontHandle.idx];
+	const Font* font = fs->m_Fonts.getPtr(cfg.fontHandle.idx);
 	short isize = (short)(cfg.fontSize * 10.0f);
 
 	y += fsGetVertAlign(fs, font, cfg.alignment, isize);
@@ -872,7 +863,7 @@ static bool fsAddWhiteRect(FontSystem* fs, uint16_t rectWidth, uint16_t rectHeig
 	// Rasterize
 	{
 		const uint32_t atlasWidth = fs->m_Atlas->m_Width;
-		uint8_t* dst = &fs->m_ImageData[(uint32_t)rectX + (uint32_t)rectY * atlasWidth];
+		uint8_t* dst = fs->m_ImageData.getPtr((uint32_t)rectX + (uint32_t)rectY * atlasWidth);
 		for (uint32_t y = 0; y < rectHeight; ++y) {
 			bx::memSet(dst, 0xFF, rectWidth);
 			dst += atlasWidth;
@@ -894,28 +885,15 @@ static void fsInvalidateRect(FontSystem* fs, uint16_t minX, uint16_t minY, uint1
 
 static FontHandle fsAllocFont(FontSystem* fs)
 {
-	if (fs->m_NumFonts == fs->m_FontCapacity) {
-		const uint32_t oldCapacity = fs->m_FontCapacity;
-		const uint32_t newCapacity = oldCapacity + 4;
-
-		Font* newFonts = (Font*)bx::alloc(fs->m_Allocator, sizeof(Font) * newCapacity);
-		if (!newFonts) {
-			return VG_INVALID_HANDLE;
-		}
-
-		bx::memCopy(&newFonts[0], fs->m_Fonts, sizeof(Font) * oldCapacity);
-		bx::memSet(&newFonts[oldCapacity], 0, sizeof(Font) * (newCapacity - oldCapacity));
-
-		bx::free(fs->m_Allocator, fs->m_Fonts);
-		fs->m_Fonts = newFonts;
-		fs->m_FontCapacity = newCapacity;
+	if (fs->m_NumFonts == fs->m_Fonts.getCount()) {
+		fs->m_Fonts.setCount(fs->m_NumFonts + 4);
 	}
 
 	const uint32_t id = fs->m_NumFonts;
 	++fs->m_NumFonts;
 
-	Font* font = &fs->m_Fonts[id];
-	bx::memSet(font, 0, sizeof(Font));
+	Font* font = fs->m_Fonts.getPtr(id);
+	font->m_Glyphs = bx::ArrayT<Glyph>(fs->m_Allocator);
 	for (uint32_t i = 0; i < FS_CONFIG_LUT_SIZE; ++i) {
 		font->m_LUT[i] = -1;
 	}
@@ -974,11 +952,8 @@ static bool fsResetAtlas(FontSystem* fs, uint16_t width, uint16_t height)
 	fsAtlasReset(fs->m_Atlas, width, height);
 
 	// Clear texture data.
-	fs->m_ImageData = (uint8_t*)bx::realloc(fs->m_Allocator, fs->m_ImageData, width * height);
-	if (!fs->m_ImageData) {
-		return false;
-	}
-	bx::memSet(fs->m_ImageData, 0, width * height);
+	fs->m_ImageData.setCount((uint32_t)width * (uint32_t)height, bx::InitNone);
+	bx::memSet(fs->m_ImageData.getPtr(), 0, (uint32_t)width * (uint32_t)height);
 
 	// Reset dirty rect
 	fs->m_DirtyRect[0] = width;
@@ -988,7 +963,7 @@ static bool fsResetAtlas(FontSystem* fs, uint16_t width, uint16_t height)
 
 	// Reset cached glyphs
 	for (uint32_t i = 0; i < fs->m_NumFonts; ++i) {
-		Font* font = &fs->m_Fonts[i];
+		Font* font = fs->m_Fonts.getPtr(i);
 		font->m_NumGlyphs = 0;
 		for (uint32_t j = 0; j < FS_CONFIG_LUT_SIZE; j++) {
 			font->m_LUT[j] = -1;
@@ -1007,17 +982,9 @@ static bool fsResetAtlas(FontSystem* fs, uint16_t width, uint16_t height)
 }
 
 // Atlas based on Skyline Bin Packer by Jukka Jylänki
-static Atlas* fsCreateAtlas(bx::AllocatorI* allocator, uint16_t w, uint16_t h)
+static Atlas* fsCreateAtlas(bx::AllocatorHandle allocator, uint16_t w, uint16_t h)
 {
-	Atlas* atlas = (Atlas*)bx::alloc(allocator, sizeof(Atlas));
-	if (!atlas) {
-		return nullptr;
-	}
-
-	bx::memSet(atlas, 0, sizeof(Atlas));
-	atlas->m_Allocator = allocator;
-	atlas->m_Width = w;
-	atlas->m_Height = h;
+	Atlas* atlas = BX_NEW_PTR(bx::getAllocator(allocator), Atlas)(allocator, w, h);
 
 	const uint32_t rootNodeID = fsAtlasAllocNode(atlas);
 	if (rootNodeID == UINT32_MAX) {
@@ -1032,31 +999,19 @@ static Atlas* fsCreateAtlas(bx::AllocatorI* allocator, uint16_t w, uint16_t h)
 
 static void fsDestroyAtlas(Atlas* atlas)
 {
-	bx::AllocatorI* allocator = atlas->m_Allocator;
-	bx::free(allocator, atlas->m_Nodes);
-	bx::free(allocator, atlas);
+	bx::deletePtr(atlas);
 }
 
 static uint32_t fsAtlasAllocNode(Atlas* atlas)
 {
-	if (atlas->m_NumNodes == atlas->m_NodeCapacity) {
-		const uint32_t oldCapacity = atlas->m_NodeCapacity;
+	if (atlas->m_NumNodes == atlas->m_Nodes.getCount()) {
+		const uint32_t oldCapacity = atlas->m_Nodes.getCount();
 		const uint32_t newCapacity = oldCapacity == 0
 			? 64
 			: oldCapacity * 2
 			;
 
-		AtlasNode* newNodes = (AtlasNode*)bx::alloc(atlas->m_Allocator, sizeof(AtlasNode) * newCapacity);
-		if (!newNodes) {
-			return UINT32_MAX;
-		}
-
-		bx::memCopy(&newNodes[0], atlas->m_Nodes, sizeof(AtlasNode) * oldCapacity);
-		bx::memSet(&newNodes[oldCapacity], 0, sizeof(AtlasNode) * (newCapacity - oldCapacity));
-
-		bx::free(atlas->m_Allocator, atlas->m_Nodes);
-		atlas->m_Nodes = newNodes;
-		atlas->m_NodeCapacity = newCapacity;
+		atlas->m_Nodes.setCount(newCapacity);
 	}
 
 	const uint32_t id = atlas->m_NumNodes;
@@ -1067,7 +1022,7 @@ static uint32_t fsAtlasAllocNode(Atlas* atlas)
 static inline void fsAtlasSetNode(Atlas* atlas, uint32_t nodeID, uint16_t x, uint16_t y, uint16_t w)
 {
 	VG_CHECK(nodeID < atlas->m_NumNodes, "Invalid atlas node ID");
-	AtlasNode* node = &atlas->m_Nodes[nodeID];
+	AtlasNode* node = atlas->m_Nodes.getPtr(nodeID);
 	node->m_X = x;
 	node->m_Y = y;
 	node->m_Width = w;
@@ -1081,7 +1036,7 @@ static bool fsAtlasInsertNode(Atlas* atlas, uint32_t nodeID, uint16_t x, uint16_
 	}
 
 	// Move everything up one slot
-	bx::memMove(&atlas->m_Nodes[nodeID + 1], &atlas->m_Nodes[nodeID], sizeof(AtlasNode) * (atlas->m_NumNodes - nodeID - 1));
+	bx::memMove(atlas->m_Nodes.getPtr(nodeID + 1), atlas->m_Nodes.getPtr(nodeID), sizeof(AtlasNode) * (atlas->m_NumNodes - nodeID - 1));
 
 	// Set the new node
 	fsAtlasSetNode(atlas, nodeID, x, y, w);
@@ -1091,7 +1046,7 @@ static bool fsAtlasInsertNode(Atlas* atlas, uint32_t nodeID, uint16_t x, uint16_
 
 static void fsAtlasRemoveNode(Atlas* atlas, uint32_t nodeID)
 {
-	bx::memMove(&atlas->m_Nodes[nodeID], &atlas->m_Nodes[nodeID + 1], sizeof(AtlasNode) * (atlas->m_NumNodes - nodeID - 1));
+	bx::memMove(atlas->m_Nodes.getPtr(nodeID), atlas->m_Nodes.getPtr(nodeID + 1), sizeof(AtlasNode) * (atlas->m_NumNodes - nodeID - 1));
 	atlas->m_NumNodes--;
 }
 
@@ -1171,8 +1126,8 @@ static bool fsAtlasAddSkylineLevel(Atlas* atlas, uint32_t nodeID, uint16_t x, ui
 
 	// Delete skyline segments that fall under the shadow of the new segment.
 	for (uint32_t i = nodeID + 1; i < atlas->m_NumNodes; ++i) {
-		AtlasNode* curNode = &atlas->m_Nodes[i];
-		const AtlasNode* prevNode = &atlas->m_Nodes[i - 1];
+		AtlasNode* curNode = atlas->m_Nodes.getPtr(i);
+		const AtlasNode* prevNode = atlas->m_Nodes.getPtr(i - 1);
 
 		const uint16_t prevNodeEndX = prevNode->m_X + prevNode->m_Width;
 		if (curNode->m_X < prevNodeEndX) {
@@ -1192,8 +1147,8 @@ static bool fsAtlasAddSkylineLevel(Atlas* atlas, uint32_t nodeID, uint16_t x, ui
 
 	// Merge same height skyline segments that are next to each other.
 	for (uint32_t i = 0; i < atlas->m_NumNodes - 1; ++i) {
-		AtlasNode* curNode = &atlas->m_Nodes[i];
-		const AtlasNode* nextNode = &atlas->m_Nodes[i + 1];
+		AtlasNode* curNode = atlas->m_Nodes.getPtr(i);
+		const AtlasNode* nextNode = atlas->m_Nodes.getPtr(i + 1);
 
 		if (curNode->m_Y == nextNode->m_Y) {
 			curNode->m_Width += nextNode->m_Width;
@@ -1272,22 +1227,20 @@ static void fsUpdateWhitePixelUV(FontSystem* fs, vg::Context* ctx)
 #endif
 }
 
-static void fsTextBufferInit(TextBuffer* tb)
+static void fsTextBufferInit(TextBuffer* tb, bx::AllocatorHandle allocator)
 {
-	bx::memSet(tb, 0, sizeof(TextBuffer));
+	tb->m_Buffer = bx::ArrayT<uint8_t>(allocator);
+	tb->m_Size = 0;
+	tb->m_Capacity = 0;
+	tb->m_Quads = nullptr;
+	tb->m_Codepoints = nullptr;
+	tb->m_CodepointSize = nullptr;
+	tb->m_GlyphIndices = nullptr;
+	tb->m_KernAdv = nullptr;
+	tb->m_GlyphFonts = nullptr;
 }
 
-static void fsTextBufferShutdown(TextBuffer* tb, bx::AllocatorI* allocator)
-{
-	if (tb->m_Buffer)
-	{
-		bx::alignedFree(allocator, tb->m_Buffer, 16);
-	}
-
-	bx::memSet(tb, 0, sizeof(TextBuffer) );
-}
-
-static bool fsTextBufferExpand(TextBuffer* tb, uint32_t newCapacity, bool keepOldData, bx::AllocatorI* allocator)
+static bool fsTextBufferExpand(TextBuffer* tb, uint32_t newCapacity, bool keepOldData)
 {
 	VG_CHECK(newCapacity > tb->m_Capacity, "Don't call expand with a smaller capacity.");
 
@@ -1300,12 +1253,10 @@ static bool fsTextBufferExpand(TextBuffer* tb, uint32_t newCapacity, bool keepOl
 		+ bx::strideAlign(sizeof(FontHandle) * newCapacity, 16) // m_GlyphFonts
 		;
 
-	uint8_t* buffer = (uint8_t*)bx::alignedAlloc(allocator, totalMemory, 16);
-	if (!buffer) {
-		return false;
-	}
+	bx::ArrayT<uint8_t> buffer(tb->m_Buffer.getAllocatorHandle() );
+	buffer.setCount(totalMemory, bx::InitNone);
 
-	uint8_t* ptr = buffer;
+	uint8_t* ptr = buffer.getPtr();
 	TextQuad* newQuads = (TextQuad*)ptr;           ptr += bx::strideAlign(sizeof(TextQuad) * newCapacity, 16);
 	uint32_t* newCodepoints = (uint32_t*)ptr;      ptr += bx::strideAlign(sizeof(uint32_t) * newCapacity, 16);
 	uint8_t* newCodepointSizes = (uint8_t*)ptr;    ptr += bx::strideAlign(sizeof(uint8_t) * newCapacity, 16);
@@ -1323,10 +1274,7 @@ static bool fsTextBufferExpand(TextBuffer* tb, uint32_t newCapacity, bool keepOl
 		bx::memCopy(newGlyphFonts, tb->m_GlyphFonts, sizeof(FontHandle) * oldCapacity);
 	}
 
-	if (tb->m_Buffer) {
-		bx::alignedFree(allocator, tb->m_Buffer, 16);
-	}
-	tb->m_Buffer = buffer;
+	tb->m_Buffer = bx::move(buffer);
 	tb->m_Quads = newQuads;
 	tb->m_Codepoints = newCodepoints;
 	tb->m_CodepointSize = newCodepointSizes;
@@ -1338,10 +1286,10 @@ static bool fsTextBufferExpand(TextBuffer* tb, uint32_t newCapacity, bool keepOl
 	return true;
 }
 
-static bool fsTextBufferReset(TextBuffer* tb, uint32_t capacity, bx::AllocatorI* allocator)
+static bool fsTextBufferReset(TextBuffer* tb, uint32_t capacity)
 {
 	if (capacity > tb->m_Capacity) {
-		if (!fsTextBufferExpand(tb, bx::strideAlign(capacity, 64), false, allocator)) {
+		if (!fsTextBufferExpand(tb, bx::strideAlign(capacity, 64), false)) {
 			return false;
 		}
 	}
@@ -1351,10 +1299,10 @@ static bool fsTextBufferReset(TextBuffer* tb, uint32_t capacity, bx::AllocatorI*
 	return true;
 }
 
-static bool fsTextBufferPushCodepoint(TextBuffer* tb, uint32_t codepoint, uint8_t codepointSize, bx::AllocatorI* allocator)
+static bool fsTextBufferPushCodepoint(TextBuffer* tb, uint32_t codepoint, uint8_t codepointSize)
 {
 	if (tb->m_Size == tb->m_Capacity) {
-		if (!fsTextBufferExpand(tb, bx::strideAlign(tb->m_Capacity + 64, 64), true, allocator)) {
+		if (!fsTextBufferExpand(tb, bx::strideAlign(tb->m_Capacity + 64, 64), true)) {
 			return false;
 		}
 	}
@@ -1424,7 +1372,7 @@ static Glyph* fsFontFindGlyph(Font* font, uint32_t codepoint, int16_t isize, int
 	int32_t prevCount = bx::max<int32_t>();
 
 	while (id != -1) {
-		Glyph *g = &font->m_Glyphs[id];
+		Glyph *g = font->m_Glyphs.getPtr(id);
 		int32_t nextId = g->m_Next;
 
 		if (g->m_Count > prevCount) {
@@ -1584,11 +1532,11 @@ static Glyph* fsBakeGlyph(FontSystem* fs, Font* font, int32_t glyphIndex, uint32
 	{
 		const uint32_t atlasWidth = fs->m_Atlas->m_Width;
 
-		uint8_t* dst = &fs->m_ImageData[(gx + pad) + (gy + pad) * atlasWidth];
+		uint8_t* dst = fs->m_ImageData.getPtr((gx + pad) + (gy + pad) * atlasWidth);
 		fsBackendRenderGlyphBitmap(font->m_BackendData, dst, gw - pad * 2, gh - pad * 2, atlasWidth, scale, scale, glyphIndex);
 
 		// Make sure there is one pixel empty border.
-		dst = &fs->m_ImageData[gx + gy * atlasWidth];
+		dst = fs->m_ImageData.getPtr(gx + gy * atlasWidth);
 		for (uint32_t y = 0; y < gh; y++) {
 			dst[y * atlasWidth] = 0;
 			dst[gw - 1 + y * atlasWidth] = 0;
@@ -1601,7 +1549,7 @@ static Glyph* fsBakeGlyph(FontSystem* fs, Font* font, int32_t glyphIndex, uint32
 
 	// Blur
 	if (iblur > 0) {
-		uint8_t* bdst = &fs->m_ImageData[gx + gy * fs->m_Atlas->m_Width];
+		uint8_t* bdst = fs->m_ImageData.getPtr(gx + gy * fs->m_Atlas->m_Width);
 		fsBlur(bdst, gw, gh, fs->m_Atlas->m_Width, iblur);
 	}
 
@@ -1612,20 +1560,15 @@ static Glyph* fsBakeGlyph(FontSystem* fs, Font* font, int32_t glyphIndex, uint32
 
 static Glyph* fsAllocGlyph(FontSystem* fs, Font* font)
 {
-	if (font->m_NumGlyphs + 1 > font->m_GlyphCapacity) {
-		font->m_GlyphCapacity = font->m_GlyphCapacity == 0
-			? 8
-			: font->m_GlyphCapacity * 2
-			;
+	BX_UNUSED(fs);
 
-		font->m_Glyphs = (Glyph*)bx::realloc(fs->m_Allocator, font->m_Glyphs, sizeof(Glyph) * font->m_GlyphCapacity);
-		if (!font->m_Glyphs) {
-			return nullptr;
-		}
+	const uint32_t capacity = font->m_Glyphs.getCount();
+	if (font->m_NumGlyphs + 1 > capacity) {
+		font->m_Glyphs.setCount(capacity == 0 ? 8 : capacity * 2, bx::InitNone);
 	}
 
 	font->m_NumGlyphs++;
-	return &font->m_Glyphs[font->m_NumGlyphs - 1];
+	return font->m_Glyphs.getPtr(font->m_NumGlyphs - 1);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1672,10 +1615,7 @@ static void* fsBackendLoadFont(FontSystem* fs, uint8_t* data, uint32_t dataSize)
 {
 	BX_UNUSED(dataSize);
 
-	bx::AllocatorI* allocator = fs->m_Allocator;
-
-	FontStb* font = (FontStb*)bx::alloc(allocator, sizeof(FontStb));
-	bx::memSet(font, 0, sizeof(FontStb));
+	FontStb* font = BX_NEW_PTR(fs->m_AllocatorBlk, FontStb)();
 
 	font->font.userdata = nullptr;
 
@@ -1686,13 +1626,13 @@ static void* fsBackendLoadFont(FontSystem* fs, uint8_t* data, uint32_t dataSize)
 	// Microsoft YaHei all ship - fails to load at all.
 	const int32_t fontOffset = stbtt_GetFontOffsetForIndex(data, 0);
 	if (fontOffset < 0) {
-		bx::free(allocator, font);
+		bx::deletePtr(font);
 		return nullptr;
 	}
 
 	int32_t stbError = stbtt_InitFont(&font->font, data, fontOffset);
 	if (!stbError) {
-		bx::free(allocator, font);
+		bx::deletePtr(font);
 		return nullptr;
 	}
 
@@ -1724,7 +1664,7 @@ static void* fsBackendLoadFont(FontSystem* fs, uint8_t* data, uint32_t dataSize)
 		const int64_t max_uint64s = FS_STBTT_MAX_KERN_CACHE_BYTES / (int64_t)sizeof(uint64_t);
 		if (total_uint64s <= max_uint64s) {
 			const size_t bytes = (size_t)total_uint64s * sizeof(uint64_t);
-			font->kern_codemap = (uint64_t*)bx::alloc(allocator, bytes);
+			font->kern_codemap = (uint64_t*)bx::allocPtr(fs->m_AllocatorBlk, bytes);
 			if (font->kern_codemap) {
 				bx::memSet(font->kern_codemap, 0, bytes);
 			}
@@ -1732,7 +1672,7 @@ static void* fsBackendLoadFont(FontSystem* fs, uint8_t* data, uint32_t dataSize)
 			font->kern_codemap = nullptr;
 		}
 	}
-	font->glyph_index_to_ascii = (uint8_t*)bx::alloc(allocator, sizeof(uint8_t) * range_glyph_indices_ascii);
+	font->glyph_index_to_ascii = (uint8_t*)bx::allocPtr(fs->m_AllocatorBlk, sizeof(uint8_t) * range_glyph_indices_ascii);
 	if (font->glyph_index_to_ascii)
 	{
 		// MC: Clear the array the dummy value meaning the value is not cached yet.
@@ -1758,13 +1698,11 @@ static void fsBackendFreeFont(FontSystem* fs, void* fontPtr)
 		return;
 	}
 
-	bx::AllocatorI* allocator = fs->m_Allocator;
+	BX_UNUSED(fs);
 
-	bx::free(allocator, font->glyph_index_to_ascii);
-	if (font->kern_codemap) {
-		bx::free(allocator, font->kern_codemap);
-	}
-	bx::free(allocator, font);
+	bx::freePtr(font->glyph_index_to_ascii);
+	bx::freePtr(font->kern_codemap);
+	bx::deletePtr(font);
 }
 
 static void fsBackendGetFontVMetrics(void* fontPtr, int32_t* ascent, int32_t* descent, int32_t* lineGap)

@@ -5,20 +5,29 @@
 
 #include "path.h"
 #include "config.h"
-#include <bx/allocator.h>
+#include <bx/array.h>
+#include <bx/blk.h>
 
 namespace vg
 {
 struct Path
 {
-	bx::AllocatorI* m_Allocator;
-	float* m_Vertices;
-	SubPath* m_SubPaths;
+	Path(bx::AllocatorHandle allocator)
+		: m_Vertices(allocator)
+		, m_SubPaths(allocator)
+		, m_CurSubPath(nullptr)
+		, m_NumVertices(0)
+		, m_NumSubPaths(0)
+		, m_Scale(1.0f)
+		, m_TesselationTolerance(0.25f)
+	{
+	}
+
+	bx::ArrayT<float> m_Vertices; // Storage, 2 floats per vertex, m_NumVertices in use.
+	bx::ArrayT<SubPath> m_SubPaths; // Storage, m_NumSubPaths in use.
 	SubPath* m_CurSubPath;
 	uint32_t m_NumVertices;
-	uint32_t m_VertexCapacity;
 	uint32_t m_NumSubPaths;
-	uint32_t m_SubPathCapacity;
 	float m_Scale;
 	float m_TesselationTolerance;
 };
@@ -26,23 +35,14 @@ struct Path
 static float* pathAllocVertices(Path* path, uint32_t n);
 static void pathAddVertex(Path* path, float x, float y);
 
-Path* createPath(bx::AllocatorI* allocator)
+Path* createPath(bx::AllocatorHandle allocator)
 {
-	Path* path = (Path*)bx::alloc(allocator, sizeof(Path));
-	bx::memSet(path, 0, sizeof(Path));
-	path->m_Allocator = allocator;
-	path->m_Scale = 1.0f;
-	path->m_TesselationTolerance = 0.25f;
-	return path;
+	return BX_NEW_PTR(bx::getAllocator(allocator), Path)(allocator);
 }
 
 void destroyPath(Path* path)
 {
-	bx::AllocatorI* allocator = path->m_Allocator;
-
-	bx::alignedFree(allocator, path->m_Vertices, 16);
-	bx::free(allocator, path->m_SubPaths);
-	bx::free(allocator, path);
+	bx::deletePtr(path);
 }
 
 void pathReset(Path* path, float scale, float tesselationTolerance)
@@ -50,9 +50,8 @@ void pathReset(Path* path, float scale, float tesselationTolerance)
 	path->m_Scale = scale;
 	path->m_TesselationTolerance = tesselationTolerance;
 
-	if (path->m_SubPathCapacity == 0) {
-		path->m_SubPathCapacity = 16;
-		path->m_SubPaths = (SubPath*)bx::alloc(path->m_Allocator, sizeof(SubPath) * path->m_SubPathCapacity);
+	if (path->m_SubPaths.getCount() == 0) {
+		path->m_SubPaths.setCount(16, bx::InitNone);
 	}
 
 	path->m_NumSubPaths = 0;
@@ -67,9 +66,8 @@ void pathMoveTo(Path* path, float x, float y)
 {
 	if (!path->m_CurSubPath || path->m_CurSubPath->m_NumVertices != 0) {
 		// Move on to the next sub path.
-		if (path->m_NumSubPaths + 1 > path->m_SubPathCapacity) {
-			path->m_SubPathCapacity += 16;
-			path->m_SubPaths = (SubPath*)bx::realloc(path->m_Allocator, path->m_SubPaths, sizeof(SubPath) * path->m_SubPathCapacity);
+		if (path->m_NumSubPaths + 1 > path->m_SubPaths.getCount()) {
+			path->m_SubPaths.setCount(path->m_SubPaths.getCount() + 16, bx::InitNone);
 		}
 
 		path->m_CurSubPath = &path->m_SubPaths[path->m_NumSubPaths++];
@@ -770,7 +768,7 @@ void pathClose(Path* path)
 
 const float* pathGetVertices(const Path* path)
 {
-	return path->m_Vertices;
+	return path->m_Vertices.getPtr();
 }
 
 uint32_t pathGetNumVertices(const Path* path)
@@ -780,7 +778,7 @@ uint32_t pathGetNumVertices(const Path* path)
 
 const SubPath* pathGetSubPaths(const Path* path)
 {
-	return path->m_SubPaths;
+	return path->m_SubPaths.getPtr();
 }
 
 uint32_t pathGetNumSubPaths(const Path* path)
@@ -790,9 +788,10 @@ uint32_t pathGetNumSubPaths(const Path* path)
 
 static float* pathAllocVertices(Path* path, uint32_t n)
 {
-	if (path->m_NumVertices + n > path->m_VertexCapacity) {
-		path->m_VertexCapacity = bx::max(path->m_VertexCapacity + n, path->m_VertexCapacity != 0 ? (path->m_VertexCapacity * 3) >> 1 : 16);
-		path->m_Vertices = (float*)bx::alignedRealloc(path->m_Allocator, path->m_Vertices, sizeof(float) * 2 * path->m_VertexCapacity, 16);
+	const uint32_t capacity = path->m_Vertices.getCount() >> 1;
+	if (path->m_NumVertices + n > capacity) {
+		const uint32_t newCapacity = bx::max(capacity + n, capacity != 0 ? (capacity * 3) >> 1 : 16);
+		path->m_Vertices.setCount(newCapacity << 1, bx::InitNone);
 	}
 
 	float* p = &path->m_Vertices[path->m_NumVertices << 1];

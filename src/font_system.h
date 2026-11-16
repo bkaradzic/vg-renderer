@@ -12,7 +12,7 @@
 
 namespace bx
 {
-struct AllocatorI;
+struct AllocatorHandle;
 }
 
 namespace vg
@@ -75,7 +75,7 @@ struct TextFlags
 
 struct FontSystem;
 
-FontSystem* fsCreate(vg::Context* ctx, bx::AllocatorI* allocator, const FontSystemConfig* cfg);
+FontSystem* fsCreate(vg::Context* ctx, bx::AllocatorHandle allocator, const FontSystemConfig* cfg);
 void fsDestroy(FontSystem* fs, vg::Context* ctx);
 void fsFrame(FontSystem* fs, vg::Context* ctx);
 FontHandle fsAddFont(FontSystem* fs, const char* name, uint8_t* data, uint32_t dataSize, uint32_t fontFlags);
