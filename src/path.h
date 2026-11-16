@@ -21,7 +21,7 @@ struct SubPath
 };
 
 // Path
-Path* createPath(bx::AllocatorI* allocator);
+Path* createPath(bx::AllocatorHandle allocator);
 void destroyPath(Path* path);
 void pathReset(Path* path, float scale, float tesselationTolerance);
 void pathMoveTo(Path* path, float x, float y);

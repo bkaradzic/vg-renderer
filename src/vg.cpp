@@ -19,7 +19,8 @@
 #include "stroker.h"
 #include "vg_util.h"
 #include "font_system.h"
-#include <bx/allocator.h>
+#include <bx/array.h>
+#include <bx/blk.h>
 #include <bx/mutex.h>
 #include <bx/handlealloc.h>
 #include <bx/string.h>
@@ -154,9 +155,14 @@ struct VertexBuffer
 
 struct IndexBuffer
 {
-	uint16_t* m_Indices;
+	IndexBuffer(bx::AllocatorHandle _allocator)
+		: m_Indices(_allocator)
+		, m_Count(0)
+	{
+	}
+
+	bx::ArrayT<uint16_t> m_Indices; // Storage, m_Count in use.
 	uint32_t m_Count;
-	uint32_t m_Capacity;
 };
 
 struct Image
@@ -261,23 +267,28 @@ static constexpr uint32_t kCommandGrowth = 256;
 
 struct CommandListCache
 {
-	CachedMesh* m_Meshes;
+	CommandListCache(bx::AllocatorHandle _allocator)
+		: m_Meshes(_allocator)
+		, m_NumMeshes(0)
+		, m_Commands(_allocator)
+		, m_NumCommands(0)
+		, m_AvgScale(0.0f)
+	{
+	}
+
+	bx::ArrayT<CachedMesh> m_Meshes; // Storage, m_NumMeshes in use.
 	uint32_t m_NumMeshes;
-	uint32_t m_MaxMeshes;
-	CachedCommand* m_Commands;
+	bx::ArrayT<CachedCommand> m_Commands; // Storage, m_NumCommands in use.
 	uint32_t m_NumCommands;
-	uint32_t m_MaxCommands;
 	float m_AvgScale;
 };
 
 struct CommandList
 {
-	uint8_t* m_CommandBuffer;
-	uint32_t m_CommandBufferCapacity;
+	bx::ArrayT<uint8_t> m_CommandBuffer; // Storage, m_CommandBufferPos bytes in use.
 	uint32_t m_CommandBufferPos;
 
-	char* m_StringBuffer;
-	uint32_t m_StringBufferCapacity;
+	bx::ArrayT<char> m_StringBuffer; // Storage, m_StringBufferPos chars in use.
 	uint32_t m_StringBufferPos;
 
 	uint32_t m_Flags;
@@ -291,7 +302,8 @@ struct Context
 {
 	Init m_Config;
 	Stats m_Stats;
-	bx::AllocatorI* m_Allocator;
+	bx::AllocatorHandle m_Allocator;
+	bx::AllocatorBlkI* m_AllocatorBlk;
 	uint16_t m_ViewID;
 	uint16_t m_CanvasWidth;
 	uint16_t m_CanvasHeight;
@@ -302,65 +314,58 @@ struct Context
 	Stroker* m_Stroker;
 	Path* m_Path;
 
-	VertexBuffer* m_VertexBuffers;
-	GPUVertexBuffer* m_GPUVertexBuffers;
+	bx::ArrayT<VertexBuffer> m_VertexBuffers; // Every one ever allocated, m_NumVertexBuffers in use this frame.
+	bx::ArrayT<GPUVertexBuffer> m_GPUVertexBuffers; // One for each of m_VertexBuffers.
 	uint32_t m_NumVertexBuffers;
-	uint32_t m_VertexBufferCapacity;
 	uint32_t m_FirstVertexBufferID;
 
-	IndexBuffer* m_IndexBuffers;
-	GPUIndexBuffer* m_GPUIndexBuffers;
-	uint32_t m_NumIndexBuffers;
+	bx::ArrayT<IndexBuffer> m_IndexBuffers;
+	bx::ArrayT<GPUIndexBuffer> m_GPUIndexBuffers; // One for each of m_IndexBuffers.
 	uint16_t m_ActiveIndexBufferID;
 
-	bx::AllocatorI* m_PosBufferPool;
-	bx::AllocatorI* m_ColorBufferPool;
-	bx::AllocatorI* m_UVBufferPool;
+	vgutil::PoolAllocator* m_PosBufferPool;
+	vgutil::PoolAllocator* m_ColorBufferPool;
+	vgutil::PoolAllocator* m_UVBufferPool;
 
 #if BX_CONFIG_SUPPORTS_THREADING
 	bx::Mutex* m_DataPoolMutex;
 #endif // BX_CONFIG_SUPPORTS_THREADING
 
-	Image* m_Images;
-	uint32_t m_ImageCapacity;
-	bx::HandleAlloc* m_ImageHandleAlloc;
+	bx::ArrayT<Image> m_Images;
+	bx::DynamicHandleAlloc* m_ImageHandleAlloc;
 
-	CommandList* m_CmdLists;
-	bx::HandleAlloc* m_CmdListHandleAlloc;
+	bx::ArrayT<CommandList> m_CmdLists;
+	bx::DynamicHandleAlloc* m_CmdListHandleAlloc;
 	uint32_t m_SubmitCmdListRecursionDepth;
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
 	CommandListCache* m_CmdListCacheStack[VG_CONFIG_COMMAND_LIST_CACHE_STACK_SIZE];
 	uint32_t m_CmdListCacheStackTop;
 #endif // VG_CONFIG_ENABLE_SHAPE_CACHING
 
-	float* m_TransformedVertices;
-	uint32_t m_TransformedVertexCapacity;
+	bx::ArrayT<float> m_TransformedVertices; // Storage, 2 floats per vertex.
 	bool m_PathTransformed;
 
-	DrawCommand* m_DrawCommands;
+	bx::ArrayT<DrawCommand> m_DrawCommands; // Storage, m_NumDrawCommands in use.
 	uint32_t m_NumDrawCommands;
-	uint32_t m_DrawCommandCapacity;
 
-	State* m_StateStack;
+	bx::ArrayT<State> m_StateStack;
 	uint32_t m_StateStackTop;
 
 	ClipState m_ClipState;
-	DrawCommand* m_ClipCommands;
+	bx::ArrayT<DrawCommand> m_ClipCommands; // Storage, m_NumClipCommands in use.
 	uint32_t m_NumClipCommands;
-	uint32_t m_ClipCommandCapacity;
 	bool m_RecordClipCommands;
 	bool m_ForceNewClipCommand;
 	bool m_ForceNewDrawCommand;
 
-	Gradient* m_Gradients;
+	bx::ArrayT<Gradient> m_Gradients;
 	uint32_t m_NextGradientID;
 
-	ImagePattern* m_ImagePatterns;
+	bx::ArrayT<ImagePattern> m_ImagePatterns;
 	uint32_t m_NextImagePatternID;
 
 	FontSystem* m_FontSystem;
-	float* m_TextVertices;
-	uint32_t m_TextVertexCapacity;
+	bx::ArrayT<float> m_TextVertices; // Storage, 2 floats per vertex.
 
 	bgfx::VertexLayout m_PosVertexDecl;
 	bgfx::VertexLayout m_UVVertexDecl;
@@ -482,7 +487,7 @@ struct Context
 	void text(CommandListHandle _handle, const TextConfig& _cfg, float _x, float _y, const char* _str, const char* _end);
 	void textBox(CommandListHandle _handle, const TextConfig& _cfg, float _x, float _y, float _breakWidth, const char* _str, const char* _end, uint32_t _textboxFlags);
 	void submitCommandList(CommandListHandle _parent, CommandListHandle _child);
-	bool init(bx::AllocatorI* _allocator, const Init* _cfg);
+	bool init(bx::AllocatorHandle _allocator, const Init* _cfg);
 	void shutdown();
 };
 
@@ -563,7 +568,7 @@ inline bool isLocal(ImagePatternHandle handle) { return isLocal(handle.flags); }
 //
 static Context* s_ctx = NULL;
 
-bool init(bx::AllocatorI* _allocator, const Init* _userCfg)
+bool init(bx::AllocatorHandle _allocator, const Init* _userCfg)
 {
 	static const Init defaultConfig =
 	{
@@ -583,31 +588,40 @@ bool init(bx::AllocatorI* _allocator, const Init* _userCfg)
 
 	VG_CHECK(cfg->maxVBVertices <= 65536, "Vertex buffers cannot be larger than 64k vertices because indices are always uint16");
 
-	const uint32_t alignment = 16;
-	const uint32_t totalMem = 0
-		+ alignSize(sizeof(Context), alignment)
-		+ alignSize(sizeof(Gradient) * cfg->maxGradients, alignment)
-		+ alignSize(sizeof(ImagePattern) * cfg->maxImagePatterns, alignment)
-		+ alignSize(sizeof(State) * cfg->maxStateStackSize, alignment)
-		+ alignSize(sizeof(CommandList) * cfg->maxCommandLists, alignment);
-
-	uint8_t* mem = (uint8_t*)bx::alignedAlloc(_allocator, totalMem, alignment);
-	bx::memSet(mem, 0, totalMem);
-
-	Context* ctx = (Context*)mem;              mem += alignSize(sizeof(Context), alignment);
-	ctx->m_Gradients = (Gradient*)mem;         mem += alignSize(sizeof(Gradient) * cfg->maxGradients, alignment);
-	ctx->m_ImagePatterns = (ImagePattern*)mem; mem += alignSize(sizeof(ImagePattern) * cfg->maxImagePatterns, alignment);
-	ctx->m_StateStack = (State*)mem;           mem += alignSize(sizeof(State) * cfg->maxStateStackSize, alignment);
-	ctx->m_CmdLists = (CommandList*)mem;       mem += alignSize(sizeof(CommandList) * cfg->maxCommandLists, alignment);
+	Context* ctx = BX_NEW_PTR(bx::getAllocator(_allocator), Context)();
 
 	s_ctx = ctx;
 	return ctx->init(_allocator, cfg);
 }
 
-bool Context::init(bx::AllocatorI* _allocator, const Init* _cfg)
+bool Context::init(bx::AllocatorHandle _allocator, const Init* _cfg)
 {
 	bx::memCopy(&m_Config, _cfg, sizeof(Init));
 	m_Allocator = _allocator;
+	m_AllocatorBlk = bx::getAllocator(_allocator);
+
+	m_VertexBuffers = bx::ArrayT<VertexBuffer>(_allocator);
+	m_GPUVertexBuffers = bx::ArrayT<GPUVertexBuffer>(_allocator);
+	m_IndexBuffers = bx::ArrayT<IndexBuffer>(_allocator);
+	m_GPUIndexBuffers = bx::ArrayT<GPUIndexBuffer>(_allocator);
+	m_Images = bx::ArrayT<Image>(_allocator);
+	m_TransformedVertices = bx::ArrayT<float>(_allocator);
+	m_DrawCommands = bx::ArrayT<DrawCommand>(_allocator);
+	m_ClipCommands = bx::ArrayT<DrawCommand>(_allocator);
+	m_TextVertices = bx::ArrayT<float>(_allocator);
+
+	m_Gradients = bx::ArrayT<Gradient>(_allocator);
+	m_Gradients.setCount(m_Config.maxGradients);
+
+	m_ImagePatterns = bx::ArrayT<ImagePattern>(_allocator);
+	m_ImagePatterns.setCount(m_Config.maxImagePatterns);
+
+	m_StateStack = bx::ArrayT<State>(_allocator);
+	m_StateStack.setCount(m_Config.maxStateStackSize);
+
+	m_CmdLists = bx::ArrayT<CommandList>(_allocator);
+	m_CmdLists.setCount(m_Config.maxCommandLists);
+
 	m_ViewID = 0;
 	m_DevicePixelRatio = 1.0f;
 	m_TesselationTolerance = 0.25f;
@@ -621,18 +635,18 @@ bool Context::init(bx::AllocatorI* _allocator, const Init* _cfg)
 	m_CmdListCacheStackTop = ~0u;
 #endif // VG_CONFIG_ENABLE_SHAPE_CACHING
 
-	m_PosBufferPool = BX_NEW(_allocator, vgutil::PoolAllocator)(sizeof(float) * 2 * m_Config.maxVBVertices, 4, _allocator);
-	m_ColorBufferPool = BX_NEW(_allocator, vgutil::PoolAllocator)(sizeof(uint32_t) * m_Config.maxVBVertices, 4, _allocator);
-	m_UVBufferPool = BX_NEW(_allocator, vgutil::PoolAllocator)(sizeof(uv_t) * 2 * m_Config.maxVBVertices, 4, _allocator);
+	m_PosBufferPool = BX_NEW_PTR(m_AllocatorBlk, vgutil::PoolAllocator)(_allocator, sizeof(float) * 2 * m_Config.maxVBVertices, 4);
+	m_ColorBufferPool = BX_NEW_PTR(m_AllocatorBlk, vgutil::PoolAllocator)(_allocator, sizeof(uint32_t) * m_Config.maxVBVertices, 4);
+	m_UVBufferPool = BX_NEW_PTR(m_AllocatorBlk, vgutil::PoolAllocator)(_allocator, sizeof(uv_t) * 2 * m_Config.maxVBVertices, 4);
 
 #if BX_CONFIG_SUPPORTS_THREADING
-	m_DataPoolMutex = BX_NEW(_allocator, bx::Mutex)();
+	m_DataPoolMutex = BX_NEW_PTR(m_AllocatorBlk, bx::Mutex)();
 #endif // BX_CONFIG_SUPPORTS_THREADING
 	m_Path = createPath(_allocator);
 	m_Stroker = createStroker(_allocator);
 
-	m_ImageHandleAlloc = bx::createHandleAlloc(_allocator, _cfg->maxImages);
-	m_CmdListHandleAlloc = bx::createHandleAlloc(_allocator, _cfg->maxCommandLists);
+	m_ImageHandleAlloc = BX_NEW_PTR(m_AllocatorBlk, bx::DynamicHandleAlloc)(_allocator, _cfg->maxImages);
+	m_CmdListHandleAlloc = BX_NEW_PTR(m_AllocatorBlk, bx::DynamicHandleAlloc)(_allocator, _cfg->maxCommandLists);
 
 	// bgfx setup
 	m_PosVertexDecl.begin().add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float).end();
@@ -706,8 +720,6 @@ void shutdown()
 
 void Context::shutdown()
 {
-	bx::AllocatorI* allocator = m_Allocator;
-
 	for (uint32_t ii = 0; ii < DrawCommand::Type::NumTypes; ++ii)
 	{
 		if (bgfx::isValid(m_ProgramHandle[ii]))
@@ -723,7 +735,7 @@ void Context::shutdown()
 	bgfx::destroy(m_InnerColorUniform);
 	bgfx::destroy(m_OuterColorUniform);
 
-	for (uint32_t ii = 0; ii < m_VertexBufferCapacity; ++ii)
+	for (uint32_t ii = 0, num = m_GPUVertexBuffers.getCount(); ii < num; ++ii)
 	{
 		GPUVertexBuffer* vb = &m_GPUVertexBuffers[ii];
 		if (bgfx::isValid(vb->m_PosBufferHandle))
@@ -742,14 +754,9 @@ void Context::shutdown()
 			vb->m_ColorBufferHandle = BGFX_INVALID_HANDLE;
 		}
 	}
-	bx::free(allocator, m_GPUVertexBuffers);
-	bx::free(allocator, m_VertexBuffers);
-	m_GPUVertexBuffers = NULL;
-	m_VertexBuffers = NULL;
-	m_VertexBufferCapacity = 0;
 	m_NumVertexBuffers = 0;
 
-	for (uint32_t ii = 0; ii < m_NumIndexBuffers; ++ii)
+	for (uint32_t ii = 0, num = m_GPUIndexBuffers.getCount(); ii < num; ++ii)
 	{
 		GPUIndexBuffer* gpuib = &m_GPUIndexBuffers[ii];
 		if (bgfx::isValid(gpuib->m_bgfxHandle))
@@ -757,42 +764,17 @@ void Context::shutdown()
 			bgfx::destroy(gpuib->m_bgfxHandle);
 			gpuib->m_bgfxHandle = BGFX_INVALID_HANDLE;
 		}
-
-		IndexBuffer* ib = &m_IndexBuffers[ii];
-		bx::alignedFree(allocator, ib->m_Indices, 16);
-		ib->m_Indices = NULL;
-		ib->m_Capacity = 0;
-		ib->m_Count = 0;
 	}
-	bx::free(allocator, m_GPUIndexBuffers);
-	bx::free(allocator, m_IndexBuffers);
-	m_GPUIndexBuffers = NULL;
-	m_IndexBuffers = NULL;
 	m_ActiveIndexBufferID = UINT16_MAX;
 
-	if (m_UVBufferPool)
-	{
-		bx::deleteObject(allocator, m_UVBufferPool);
-		m_UVBufferPool = NULL;
-	}
+	bx::deletePtr(m_UVBufferPool);
+	m_UVBufferPool = NULL;
 
-	if (m_ColorBufferPool)
-	{
-		bx::deleteObject(allocator, m_ColorBufferPool);
-		m_ColorBufferPool = NULL;
-	}
+	bx::deletePtr(m_ColorBufferPool);
+	m_ColorBufferPool = NULL;
 
-	if (m_PosBufferPool)
-	{
-		bx::deleteObject(allocator, m_PosBufferPool);
-		m_PosBufferPool = NULL;
- 	}
-
-	bx::free(allocator, m_DrawCommands);
-	m_DrawCommands = NULL;
-
-	bx::free(allocator, m_ClipCommands);
-	m_ClipCommands = NULL;
+	bx::deletePtr(m_PosBufferPool);
+	m_PosBufferPool = NULL;
 
 	if (m_FontSystem)
 	{
@@ -800,7 +782,7 @@ void Context::shutdown()
 		m_FontSystem = NULL;
 	}
 
-	for (uint32_t ii = 0; ii < m_ImageCapacity; ++ii)
+	for (uint32_t ii = 0, num = m_Images.getCount(); ii < num; ++ii)
 	{
 		Image* img = &m_Images[ii];
 		if (bgfx::isValid(img->m_bgfxHandle))
@@ -808,13 +790,11 @@ void Context::shutdown()
 			bgfx::destroy(img->m_bgfxHandle);
 		}
 	}
-	bx::free(allocator, m_Images);
-	m_Images = NULL;
 
-	bx::destroyHandleAlloc(allocator, m_ImageHandleAlloc);
+	bx::deletePtr(m_ImageHandleAlloc);
 	m_ImageHandleAlloc = NULL;
 
-	bx::destroyHandleAlloc(allocator, m_CmdListHandleAlloc);
+	bx::deletePtr(m_CmdListHandleAlloc);
 	m_CmdListHandleAlloc = NULL;
 
 	destroyPath(m_Path);
@@ -823,24 +803,12 @@ void Context::shutdown()
 	destroyStroker(m_Stroker);
 	m_Stroker = NULL;
 
-	if (m_TextVertices)
-	{
-		bx::alignedFree(allocator, m_TextVertices, 16);
-		m_TextVertices = NULL;
-	}
-
-	if (m_TransformedVertices)
-	{
-		bx::alignedFree(allocator, m_TransformedVertices, 16);
-		m_TransformedVertices = NULL;
-	}
-
 #if BX_CONFIG_SUPPORTS_THREADING
-	bx::deleteObject(allocator, m_DataPoolMutex);
+	bx::deletePtr(m_DataPoolMutex);
 #endif // BX_CONFIG_SUPPORTS_THREADING
 
-	bx::alignedFree(allocator, this, 16);
 	s_ctx = NULL;
+	bx::deletePtr(this);
 }
 
 void begin(uint16_t _viewID, uint16_t _canvasWidth, uint16_t _canvasHeight, float _devicePixelRatio)
@@ -901,9 +869,9 @@ void Context::end()
 		// Release the vertex buffer allocated in beginFrame()
 		VertexBuffer* vb = &m_VertexBuffers[m_FirstVertexBufferID];
 
-		bx::free(m_PosBufferPool, vb->m_Pos);
-		bx::free(m_ColorBufferPool, vb->m_Color);
-		bx::free(m_UVBufferPool, vb->m_UV);
+		m_PosBufferPool->free(vb->m_Pos);
+		m_ColorBufferPool->free(vb->m_Color);
+		m_UVBufferPool->free(vb->m_UV);
 
 		return;
 	}
@@ -947,7 +915,7 @@ void Context::end()
 	// Update bgfx index buffer...
 	IndexBuffer* ib = &m_IndexBuffers[m_ActiveIndexBufferID];
 	GPUIndexBuffer* gpuib = &m_GPUIndexBuffers[m_ActiveIndexBufferID];
-	const bgfx::Memory* indexMem = bgfx::makeRef(&ib->m_Indices[0], sizeof(uint16_t) * ib->m_Count, releaseIndexBufferCallback, this);
+	const bgfx::Memory* indexMem = bgfx::makeRef(ib->m_Indices.getPtr(), sizeof(uint16_t) * ib->m_Count, releaseIndexBufferCallback, this);
 	if (!bgfx::isValid(gpuib->m_bgfxHandle))
 	{
 		gpuib->m_bgfxHandle = bgfx::createDynamicIndexBuffer(indexMem, BGFX_BUFFER_ALLOW_RESIZE);
@@ -1794,8 +1762,6 @@ void Context::destroyCommandList(CommandListHandle _handle)
 	VG_CHECK(!isValid(m_ActiveCommandList), "Cannot destroy command list while inside a beginCommandList()/endCommandList() block");
 	VG_CHECK(isValid(_handle), "Invalid command list handle");
 
-	bx::AllocatorI* allocator = m_Allocator;
-
 	CommandList* cl = &m_CmdLists[_handle.idx];
 
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
@@ -1805,16 +1771,19 @@ void Context::destroyCommandList(CommandListHandle _handle)
 	}
 #endif // VG_CONFIG_ENABLE_SHAPE_CACHING
 
-	m_Stats.cmdListMemoryTotal -= cl->m_CommandBufferCapacity;
+	m_Stats.cmdListMemoryTotal -= cl->m_CommandBuffer.getCount();
 	m_Stats.cmdListMemoryUsed -= cl->m_CommandBufferPos;
 
-	if (cl->m_CommandBuffer)
-	{
-		bx::alignedFree(allocator, cl->m_CommandBuffer, VG_CONFIG_COMMAND_LIST_ALIGNMENT);
-		cl->m_CommandBuffer = NULL;
-	}
-	bx::free(allocator, cl->m_StringBuffer);
-	bx::memSet(cl, 0, sizeof(CommandList));
+	cl->m_CommandBuffer.clear();
+	cl->m_CommandBuffer.setCapacity(0);
+	cl->m_CommandBufferPos = 0;
+	cl->m_StringBuffer.clear();
+	cl->m_StringBuffer.setCapacity(0);
+	cl->m_StringBufferPos = 0;
+	cl->m_Flags = 0;
+	cl->m_NumGradients = 0;
+	cl->m_NumImagePatterns = 0;
+	cl->m_Cache = NULL;
 
 	m_CmdListHandleAlloc->free(_handle.idx);
 }
@@ -3961,7 +3930,7 @@ void Context::indexedTriList(const float* _pos, const uv_t* _uv, uint32_t _numVe
 
 	// Index buffer
 	IndexBuffer* ib = &m_IndexBuffers[m_ActiveIndexBufferID];
-	uint16_t* dstIndex = &ib->m_Indices[cmd->m_FirstIndexID + cmd->m_NumIndices];
+	uint16_t* dstIndex = ib->m_Indices.getPtr(cmd->m_FirstIndexID + cmd->m_NumIndices);
 	vgutil::batchTransformDrawIndices(_indices, _numIndices, dstIndex, (uint16_t)cmd->m_NumVertices);
 
 	cmd->m_NumVertices += _numVertices;
@@ -4089,15 +4058,15 @@ void Context::submitCommandList(CommandListHandle _handle)
 	VG_CHECK(firstGradientID + cl->m_NumGradients <= m_Config.maxGradients, "Not enough free gradients for command list. Increase Init::maxGradients");
 	VG_CHECK(firstImagePatternID + cl->m_NumImagePatterns <= m_Config.maxImagePatterns, "Not enough free image patterns for command list. Increase Init::maxImagePatterns");
 
-	const uint8_t* cmd = cl->m_CommandBuffer;
-	const uint8_t* cmdListEnd = cl->m_CommandBuffer + cl->m_CommandBufferPos;
+	const uint8_t* cmd = cl->m_CommandBuffer.getPtr();
+	const uint8_t* cmdListEnd = cl->m_CommandBuffer.getPtr(cl->m_CommandBufferPos);
 	if (cmd == cmdListEnd)
 	{
 		--m_SubmitCmdListRecursionDepth;
 		return;
 	}
 
-	const char* stringBuffer = cl->m_StringBuffer;
+	const char* stringBuffer = cl->m_StringBuffer.getPtr();
 
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
 	pushCommandListCache(this, clCache);
@@ -4490,21 +4459,19 @@ static void updateState(State* _state)
 
 static float* allocTransformedVertices(Context* _ctx, uint32_t _numVertices)
 {
-	if (_numVertices > _ctx->m_TransformedVertexCapacity)
+	if (_numVertices * 2 > _ctx->m_TransformedVertices.getCount())
 	{
-		bx::AllocatorI* allocator = _ctx->m_Allocator;
-		_ctx->m_TransformedVertices = (float*)bx::alignedRealloc(allocator, _ctx->m_TransformedVertices, sizeof(float) * 2 * _numVertices, 16);
-		_ctx->m_TransformedVertexCapacity = _numVertices;
+		_ctx->m_TransformedVertices.setCount(_numVertices * 2, bx::InitNone);
 	}
 
-	return _ctx->m_TransformedVertices;
+	return _ctx->m_TransformedVertices.getPtr();
 }
 
 static const float* transformPath(Context* _ctx)
 {
 	if (_ctx->m_PathTransformed)
 	{
-		return _ctx->m_TransformedVertices;
+		return _ctx->m_TransformedVertices.getPtr();
 	}
 
 	Path* path = _ctx->m_Path;
@@ -4523,13 +4490,13 @@ static const float* transformPath(Context* _ctx)
 
 static VertexBuffer* allocVertexBuffer(Context* _ctx)
 {
-	if (_ctx->m_NumVertexBuffers + 1 > _ctx->m_VertexBufferCapacity)
+	if (_ctx->m_NumVertexBuffers + 1 > _ctx->m_VertexBuffers.getCount())
 	{
-		_ctx->m_VertexBufferCapacity++;
-		_ctx->m_VertexBuffers = (VertexBuffer*)bx::realloc(_ctx->m_Allocator, _ctx->m_VertexBuffers, sizeof(VertexBuffer) * _ctx->m_VertexBufferCapacity);
-		_ctx->m_GPUVertexBuffers = (GPUVertexBuffer*)bx::realloc(_ctx->m_Allocator, _ctx->m_GPUVertexBuffers, sizeof(GPUVertexBuffer) * _ctx->m_VertexBufferCapacity);
+		const uint32_t numVertexBuffers = _ctx->m_VertexBuffers.getCount() + 1;
+		_ctx->m_VertexBuffers.setCount(numVertexBuffers, bx::InitNone);
+		_ctx->m_GPUVertexBuffers.setCount(numVertexBuffers, bx::InitNone);
 
-		GPUVertexBuffer* gpuvb = &_ctx->m_GPUVertexBuffers[_ctx->m_VertexBufferCapacity - 1];
+		GPUVertexBuffer* gpuvb = &_ctx->m_GPUVertexBuffers[numVertexBuffers - 1];
 
 		gpuvb->m_PosBufferHandle = BGFX_INVALID_HANDLE;
 		gpuvb->m_UVBufferHandle = BGFX_INVALID_HANDLE;
@@ -4541,9 +4508,9 @@ static VertexBuffer* allocVertexBuffer(Context* _ctx)
 #endif // BX_CONFIG_SUPPORTS_THREADING
 
 	VertexBuffer* vb = &_ctx->m_VertexBuffers[_ctx->m_NumVertexBuffers++];
-	vb->m_Pos = (float*)bx::alloc(_ctx->m_PosBufferPool, sizeof(float) * 2 * _ctx->m_Config.maxVBVertices);
-	vb->m_Color = (uint32_t*)bx::alloc(_ctx->m_ColorBufferPool, sizeof(uint32_t) * _ctx->m_Config.maxVBVertices);
-	vb->m_UV = (uv_t*)bx::alloc(_ctx->m_UVBufferPool, sizeof(uv_t) * 2 * _ctx->m_Config.maxVBVertices);
+	vb->m_Pos = (float*)_ctx->m_PosBufferPool->alloc();
+	vb->m_Color = (uint32_t*)_ctx->m_ColorBufferPool->alloc();
+	vb->m_UV = (uv_t*)_ctx->m_UVBufferPool->alloc();
 	vb->m_Count = 0;
 
 	return vb;
@@ -4556,7 +4523,7 @@ static uint16_t allocIndexBuffer(Context* _ctx)
 #endif // BX_CONFIG_SUPPORTS_THREADING
 
 	uint16_t ibID = UINT16_MAX;
-	const uint32_t numIB = _ctx->m_NumIndexBuffers;
+	const uint32_t numIB = _ctx->m_IndexBuffers.getCount();
 	for (uint32_t ii = 0; ii < numIB; ++ii)
 	{
 		if (_ctx->m_IndexBuffers[ii].m_Count == 0)
@@ -4568,16 +4535,10 @@ static uint16_t allocIndexBuffer(Context* _ctx)
 
 	if (ibID == UINT16_MAX)
 	{
-		_ctx->m_NumIndexBuffers++;
-		_ctx->m_IndexBuffers = (IndexBuffer*)bx::realloc(_ctx->m_Allocator, _ctx->m_IndexBuffers, sizeof(IndexBuffer) * _ctx->m_NumIndexBuffers);
-		_ctx->m_GPUIndexBuffers = (GPUIndexBuffer*)bx::realloc(_ctx->m_Allocator, _ctx->m_GPUIndexBuffers, sizeof(GPUIndexBuffer) * _ctx->m_NumIndexBuffers);
+		ibID = (uint16_t)numIB;
 
-		ibID = (uint16_t)(_ctx->m_NumIndexBuffers - 1);
-
-		IndexBuffer* ib = &_ctx->m_IndexBuffers[ibID];
-		ib->m_Capacity = 0;
-		ib->m_Count = 0;
-		ib->m_Indices = NULL;
+		_ctx->m_IndexBuffers.add(bx::Emplace, _ctx->m_Allocator);
+		_ctx->m_GPUIndexBuffers.setCount(numIB + 1, bx::InitNone);
 
 		GPUIndexBuffer* gpuib = &_ctx->m_GPUIndexBuffers[ibID];
 		gpuib->m_bgfxHandle = BGFX_INVALID_HANDLE;
@@ -4593,10 +4554,10 @@ static void releaseIndexBuffer(Context* _ctx, uint16_t* _data)
 #endif // BX_CONFIG_SUPPORTS_THREADING
 
 	VG_CHECK(_data != NULL, "Tried to release a null vertex buffer");
-	const uint32_t numIB = _ctx->m_NumIndexBuffers;
+	const uint32_t numIB = _ctx->m_IndexBuffers.getCount();
 	for (uint32_t ii = 0; ii < numIB; ++ii)
 	{
-		if (_ctx->m_IndexBuffers[ii].m_Indices == _data)
+		if (_ctx->m_IndexBuffers[ii].m_Indices.getPtr() == _data)
 		{
 			// Reset the ib for reuse.
 			_ctx->m_IndexBuffers[ii].m_Count = 0;
@@ -4640,7 +4601,7 @@ static void createDrawCommand_VertexColor(Context* _ctx, const float* _vtx, uint
 
 	// Index buffer
 	IndexBuffer* ib = &_ctx->m_IndexBuffers[_ctx->m_ActiveIndexBufferID];
-	uint16_t* dstIndex = &ib->m_Indices[cmd->m_FirstIndexID + cmd->m_NumIndices];
+	uint16_t* dstIndex = ib->m_Indices.getPtr(cmd->m_FirstIndexID + cmd->m_NumIndices);
 	vgutil::batchTransformDrawIndices(_indices, _numIndices, dstIndex, (uint16_t)cmd->m_NumVertices);
 
 	cmd->m_NumVertices += _numVertices;
@@ -4669,7 +4630,7 @@ static void createDrawCommand_ImagePattern(Context* _ctx, ImagePatternHandle _im
 	}
 
 	IndexBuffer* ib = &_ctx->m_IndexBuffers[_ctx->m_ActiveIndexBufferID];
-	uint16_t* dstIndex = &ib->m_Indices[cmd->m_FirstIndexID + cmd->m_NumIndices];
+	uint16_t* dstIndex = ib->m_Indices.getPtr(cmd->m_FirstIndexID + cmd->m_NumIndices);
 	vgutil::batchTransformDrawIndices(_indices, _numIndices, dstIndex, (uint16_t)cmd->m_NumVertices);
 
 	cmd->m_NumVertices += _numVertices;
@@ -4698,7 +4659,7 @@ static void createDrawCommand_ColorGradient(Context* _ctx, GradientHandle _gradi
 	}
 
 	IndexBuffer* ib = &_ctx->m_IndexBuffers[_ctx->m_ActiveIndexBufferID];
-	uint16_t* dstIndex = &ib->m_Indices[cmd->m_FirstIndexID + cmd->m_NumIndices];
+	uint16_t* dstIndex = ib->m_Indices.getPtr(cmd->m_FirstIndexID + cmd->m_NumIndices);
 	vgutil::batchTransformDrawIndices(_indices, _numIndices, dstIndex, (uint16_t)cmd->m_NumVertices);
 
 	cmd->m_NumVertices += _numVertices;
@@ -4719,7 +4680,7 @@ static void createDrawCommand_Clip(Context* _ctx, const float* _vtx, uint32_t _n
 
 	// Index buffer
 	IndexBuffer* ib = &_ctx->m_IndexBuffers[_ctx->m_ActiveIndexBufferID];
-	uint16_t* dstIndex = &ib->m_Indices[cmd->m_FirstIndexID + cmd->m_NumIndices];
+	uint16_t* dstIndex = ib->m_Indices.getPtr(cmd->m_FirstIndexID + cmd->m_NumIndices);
 	vgutil::batchTransformDrawIndices(_indices, _numIndices, dstIndex, (uint16_t)cmd->m_NumVertices);
 
 	cmd->m_NumVertices += _numVertices;
@@ -4745,7 +4706,7 @@ static uint32_t allocVertices(Context* _ctx, uint32_t _numVertices, uint32_t* _v
 		_ctx->m_ForceNewClipCommand = true;
 	}
 
-	*_vbID = (uint32_t)(vb - _ctx->m_VertexBuffers);
+	*_vbID = (uint32_t)(vb - _ctx->m_VertexBuffers.getPtr());
 
 	const uint32_t firstVertexID = vb->m_Count;
 	vb->m_Count += _numVertices;
@@ -4755,12 +4716,12 @@ static uint32_t allocVertices(Context* _ctx, uint32_t _numVertices, uint32_t* _v
 static uint32_t allocIndices(Context* _ctx, uint32_t _numIndices)
 {
 	IndexBuffer* ib = &_ctx->m_IndexBuffers[_ctx->m_ActiveIndexBufferID];
-	if (ib->m_Count + _numIndices > ib->m_Capacity)
+	const uint32_t capacity = ib->m_Indices.getCount();
+	if (ib->m_Count + _numIndices > capacity)
 	{
-		const uint32_t nextCapacity = ib->m_Capacity != 0 ? (ib->m_Capacity * 3) / 2 : 32;
+		const uint32_t nextCapacity = capacity != 0 ? (capacity * 3) / 2 : 32;
 
-		ib->m_Capacity = bx::max(nextCapacity, ib->m_Count + _numIndices);
-		ib->m_Indices = (uint16_t*)bx::alignedRealloc(_ctx->m_Allocator, ib->m_Indices, sizeof(uint16_t) * ib->m_Capacity, 16);
+		ib->m_Indices.setCount(bx::max(nextCapacity, ib->m_Count + _numIndices), bx::InitNone);
 	}
 
 	const uint32_t firstIndexID = ib->m_Count;
@@ -4794,10 +4755,9 @@ static DrawCommand* allocDrawCommand(Context* _ctx, uint32_t _numVertices, uint3
 	}
 
 	// The new draw command cannot be combined with the previous one. Create a new one.
-	if (_ctx->m_NumDrawCommands == _ctx->m_DrawCommandCapacity)
+	if (_ctx->m_NumDrawCommands == _ctx->m_DrawCommands.getCount())
 	{
-		_ctx->m_DrawCommandCapacity = _ctx->m_DrawCommandCapacity + 32;
-		_ctx->m_DrawCommands = (DrawCommand*)bx::realloc(_ctx->m_Allocator, _ctx->m_DrawCommands, sizeof(DrawCommand) * _ctx->m_DrawCommandCapacity);
+		_ctx->m_DrawCommands.setCount(_ctx->m_DrawCommands.getCount() + 32, bx::InitNone);
 	}
 
 	DrawCommand* cmd = &_ctx->m_DrawCommands[_ctx->m_NumDrawCommands];
@@ -4845,10 +4805,9 @@ static DrawCommand* allocClipCommand(Context* _ctx, uint32_t _numVertices, uint3
 	}
 
 	// The new clip command cannot be combined with the previous one. Create a new one.
-	if (_ctx->m_NumClipCommands == _ctx->m_ClipCommandCapacity)
+	if (_ctx->m_NumClipCommands == _ctx->m_ClipCommands.getCount())
 	{
-		_ctx->m_ClipCommandCapacity = _ctx->m_ClipCommandCapacity + 32;
-		_ctx->m_ClipCommands = (DrawCommand*)bx::realloc(_ctx->m_Allocator, _ctx->m_ClipCommands, sizeof(DrawCommand) * _ctx->m_ClipCommandCapacity);
+		_ctx->m_ClipCommands.setCount(_ctx->m_ClipCommands.getCount() + 32, bx::InitNone);
 	}
 
 	DrawCommand* cmd = &_ctx->m_ClipCommands[_ctx->m_NumClipCommands];
@@ -4890,26 +4849,20 @@ static ImageHandle allocImage(Context* _ctx)
 		return VG_INVALID_HANDLE;
 	}
 
-	if (handle.idx >= _ctx->m_ImageCapacity)
+	if (handle.idx >= _ctx->m_Images.getCount())
 	{
-		const uint32_t oldCapacity = _ctx->m_ImageCapacity;
-
-		_ctx->m_ImageCapacity = bx::min(bx::max(_ctx->m_ImageCapacity + 4, handle.idx + 1), _ctx->m_Config.maxImages);
-		_ctx->m_Images = (Image*)bx::realloc(_ctx->m_Allocator, _ctx->m_Images, sizeof(Image) * _ctx->m_ImageCapacity);
-		if (!_ctx->m_Images)
-		{
-			return VG_INVALID_HANDLE;
-		}
+		const uint32_t oldCapacity = _ctx->m_Images.getCount();
+		const uint32_t capacity = bx::min<uint32_t>(bx::max<uint32_t>(oldCapacity + 4, handle.idx + 1), _ctx->m_Config.maxImages);
+		_ctx->m_Images.setCount(capacity, bx::InitNone);
 
 		// Reset all new textures...
-		const uint32_t capacity = _ctx->m_ImageCapacity;
 		for (uint32_t ii = oldCapacity; ii < capacity; ++ii)
 		{
 			resetImage(&_ctx->m_Images[ii]);
 		}
 	}
 
-	VG_CHECK(handle.idx < _ctx->m_ImageCapacity, "Allocated invalid image handle");
+	VG_CHECK(handle.idx < _ctx->m_Images.getCount(), "Allocated invalid image handle");
 	Image* tex = &_ctx->m_Images[handle.idx];
 	VG_CHECK(!bgfx::isValid(tex->m_bgfxHandle), "Allocated texture is already in use");
 	resetImage(tex);
@@ -4922,10 +4875,9 @@ static void renderTextQuads(Context* _ctx, const TextQuad* _quads, uint32_t _num
 	const uint32_t numDrawVertices = _numQuads * 4;
 	const uint32_t numDrawIndices = _numQuads * 6;
 
-	if (_ctx->m_TextVertexCapacity < numDrawVertices)
+	if (_ctx->m_TextVertices.getCount() < numDrawVertices * 2)
 	{
-		_ctx->m_TextVertices = (float*)bx::alignedRealloc(_ctx->m_Allocator, _ctx->m_TextVertices, sizeof(float) * 2 * numDrawVertices, 16);
-		_ctx->m_TextVertexCapacity = numDrawVertices;
+		_ctx->m_TextVertices.setCount(numDrawVertices * 2, bx::InitNone);
 	}
 
 	const State* state = getState(_ctx);
@@ -4941,7 +4893,7 @@ static void renderTextQuads(Context* _ctx, const TextQuad* _quads, uint32_t _num
 	mtx[5] = state->m_TransformMtx[5];
 
 	// TODO: Calculate bounding rect of the quads.
-	vgutil::batchTransformTextQuads(&_quads->m_Pos[0], _numQuads, mtx, _ctx->m_TextVertices);
+	vgutil::batchTransformTextQuads(&_quads->m_Pos[0], _numQuads, mtx, _ctx->m_TextVertices.getPtr());
 
 	DrawCommand* cmd = allocDrawCommand(_ctx, numDrawVertices, numDrawIndices, DrawCommand::Type::Textured, _img.idx);
 
@@ -4949,7 +4901,7 @@ static void renderTextQuads(Context* _ctx, const TextQuad* _quads, uint32_t _num
 	const uint32_t vbOffset = cmd->m_FirstVertexID + cmd->m_NumVertices;
 
 	float* dstPos = &vb->m_Pos[vbOffset << 1];
-	bx::memCopy(dstPos, _ctx->m_TextVertices, sizeof(float) * 2 * numDrawVertices);
+	bx::memCopy(dstPos, _ctx->m_TextVertices.getPtr(), sizeof(float) * 2 * numDrawVertices);
 
 	uint32_t* dstColor = &vb->m_Color[vbOffset];
 	vgutil::memset32(dstColor, numDrawVertices, &_color);
@@ -4974,7 +4926,7 @@ static void renderTextQuads(Context* _ctx, const TextQuad* _quads, uint32_t _num
 	}
 
 	IndexBuffer* ib = &_ctx->m_IndexBuffers[_ctx->m_ActiveIndexBufferID];
-	uint16_t* dstIndex = &ib->m_Indices[cmd->m_FirstIndexID + cmd->m_NumIndices];
+	uint16_t* dstIndex = ib->m_Indices.getPtr(cmd->m_FirstIndexID + cmd->m_NumIndices);
 	vgutil::genQuadIndices_unaligned(dstIndex, _numQuads, (uint16_t)cmd->m_NumVertices);
 
 	cmd->m_NumVertices += numDrawVertices;
@@ -4991,7 +4943,14 @@ static CommandListHandle allocCommandList(Context* _ctx)
 
 	VG_CHECK(handle.idx < _ctx->m_Config.maxCommandLists, "Allocated invalid command list handle");
 	CommandList* cl = &_ctx->m_CmdLists[handle.idx];
-	bx::memSet(cl, 0, sizeof(CommandList));
+	cl->m_CommandBuffer = bx::ArrayT<uint8_t>(_ctx->m_Allocator);
+	cl->m_CommandBufferPos = 0;
+	cl->m_StringBuffer = bx::ArrayT<char>(_ctx->m_Allocator);
+	cl->m_StringBufferPos = 0;
+	cl->m_Flags = 0;
+	cl->m_NumGradients = 0;
+	cl->m_NumImagePatterns = 0;
+	cl->m_Cache = NULL;
 
 	return handle;
 }
@@ -5004,20 +4963,13 @@ static inline bool isCommandListHandleValid(Context* _ctx, CommandListHandle _ha
 #if VG_CONFIG_ENABLE_SHAPE_CACHING
 static CommandListCache* allocCommandListCache(Context* _ctx)
 {
-	bx::AllocatorI* allocator = _ctx->m_Allocator;
-
-	CommandListCache* cache = (CommandListCache*)bx::alloc(allocator, sizeof(CommandListCache));
-	bx::memSet(cache, 0, sizeof(CommandListCache));
-
-	return cache;
+	return BX_NEW_PTR(_ctx->m_AllocatorBlk, CommandListCache)(_ctx->m_Allocator);
 }
 
 static void freeCommandListCache(Context* _ctx, CommandListCache* _cache)
 {
-	bx::AllocatorI* allocator = _ctx->m_Allocator;
-
 	clCacheReset(_ctx, _cache);
-	bx::free(allocator, _cache);
+	bx::deletePtr(_cache);
 }
 #endif // VG_CONFIG_ENABLE_SHAPE_CACHING
 
@@ -5031,16 +4983,15 @@ static uint8_t* clAllocCommand(Context* _ctx, CommandList* _cl, CommandType::Enu
 	const uint32_t pos = _cl->m_CommandBufferPos;
 	VG_CHECK(isAligned(pos, VG_CONFIG_COMMAND_LIST_ALIGNMENT), "Unaligned command buffer position");
 
-	if (pos + totalSize > _cl->m_CommandBufferCapacity)
+	if (pos + totalSize > _cl->m_CommandBuffer.getCount())
 	{
 		const uint32_t capacityDelta = bx::max<uint32_t>(totalSize, 256);
-		_cl->m_CommandBufferCapacity += capacityDelta;
-		_cl->m_CommandBuffer = (uint8_t*)bx::alignedRealloc(_ctx->m_Allocator, _cl->m_CommandBuffer, _cl->m_CommandBufferCapacity, VG_CONFIG_COMMAND_LIST_ALIGNMENT);
+		_cl->m_CommandBuffer.setCount(_cl->m_CommandBuffer.getCount() + capacityDelta, bx::InitNone);
 
 		_ctx->m_Stats.cmdListMemoryTotal += capacityDelta;
 	}
 
-	uint8_t* ptr = &_cl->m_CommandBuffer[pos];
+	uint8_t* ptr = _cl->m_CommandBuffer.getPtr(pos);
 	_cl->m_CommandBufferPos += totalSize;
 	_ctx->m_Stats.cmdListMemoryUsed += totalSize;
 
@@ -5055,14 +5006,15 @@ static uint8_t* clAllocCommand(Context* _ctx, CommandList* _cl, CommandType::Enu
 
 static uint32_t clStoreString(Context* _ctx, CommandList* _cl, const char* _str, uint32_t _len)
 {
-	if (_cl->m_StringBufferPos + _len > _cl->m_StringBufferCapacity)
+	BX_UNUSED(_ctx);
+
+	if (_cl->m_StringBufferPos + _len > _cl->m_StringBuffer.getCount())
 	{
-		_cl->m_StringBufferCapacity += bx::max<uint32_t>(_len, 128);
-		_cl->m_StringBuffer = (char*)bx::realloc(_ctx->m_Allocator, _cl->m_StringBuffer, _cl->m_StringBufferCapacity);
+		_cl->m_StringBuffer.setCount(_cl->m_StringBuffer.getCount() + bx::max<uint32_t>(_len, 128), bx::InitNone);
 	}
 
 	const uint32_t offset = _cl->m_StringBufferPos;
-	bx::memCopy(_cl->m_StringBuffer + offset, _str, _len);
+	bx::memCopy(_cl->m_StringBuffer.getPtr(offset), _str, _len);
 	_cl->m_StringBufferPos += _len;
 	return offset;
 }
@@ -5109,17 +5061,14 @@ static void beginCachedCommand(Context* _ctx)
 	CommandListCache* cache = getCommandListCacheStackTop(_ctx);
 	VG_CHECK(cache, "No bound CommandListCache");
 
-	bx::AllocatorI* allocator = _ctx->m_Allocator;
-
 	cache->m_NumCommands++;
-	if (cache->m_NumCommands > cache->m_MaxCommands)
+	if (cache->m_NumCommands > cache->m_Commands.getCount())
 	{
-		cache->m_MaxCommands += kCommandGrowth;
-		cache->m_Commands = (CachedCommand*)bx::realloc(allocator, cache->m_Commands, sizeof(CachedCommand) * cache->m_MaxCommands);
+		cache->m_Commands.setCount(cache->m_Commands.getCount() + kCommandGrowth, bx::InitNone);
 	}
 
 
-	CachedCommand* lastCmd = &cache->m_Commands[cache->m_NumCommands - 1];
+	CachedCommand* lastCmd = cache->m_Commands.getPtr(cache->m_NumCommands - 1);
 	lastCmd->m_FirstMeshID = (uint16_t)cache->m_NumMeshes;
 	lastCmd->m_NumMeshes = 0;
 
@@ -5134,7 +5083,7 @@ static void endCachedCommand(Context* _ctx)
 
 	VG_CHECK(cache->m_NumCommands != 0, "beginCachedCommand() hasn't been called");
 
-	CachedCommand* lastCmd = &cache->m_Commands[cache->m_NumCommands - 1];
+	CachedCommand* lastCmd = cache->m_Commands.getPtr(cache->m_NumCommands - 1);
 	VG_CHECK(lastCmd->m_NumMeshes == 0, "endCachedCommand() called too many times");
 	lastCmd->m_NumMeshes = (uint16_t)(cache->m_NumMeshes - lastCmd->m_FirstMeshID);
 }
@@ -5144,23 +5093,20 @@ static void addCachedCommand(Context* _ctx, const float* _pos, uint32_t _numVert
 	CommandListCache* cache = getCommandListCacheStackTop(_ctx);
 	VG_CHECK(cache, "No bound CommandListCache");
 
-	bx::AllocatorI* allocator = _ctx->m_Allocator;
-
 	cache->m_NumMeshes++;
-	if (cache->m_NumMeshes > cache->m_MaxMeshes)
+	if (cache->m_NumMeshes > cache->m_Meshes.getCount())
 	{
-		cache->m_MaxMeshes += kMeshGrowth;
-		cache->m_Meshes = (CachedMesh*)bx::realloc(allocator, cache->m_Meshes, sizeof(CachedMesh) * cache->m_MaxMeshes);
+		cache->m_Meshes.setCount(cache->m_Meshes.getCount() + kMeshGrowth, bx::InitNone);
 	}
 
-	CachedMesh* mesh = &cache->m_Meshes[cache->m_NumMeshes - 1];
+	CachedMesh* mesh = cache->m_Meshes.getPtr(cache->m_NumMeshes - 1);
 
 	const uint32_t totalMem = 0
 		+ alignSize(sizeof(float) * 2 * _numVertices, 16)
 		+ ((_numColors != 1) ? alignSize(sizeof(uint32_t) * _numVertices, 16) : 0)
 		+ alignSize(sizeof(uint16_t) * _numIndices, 16);
 
-	uint8_t* mem = (uint8_t*)bx::alignedAlloc(allocator, totalMem, 16);
+	uint8_t* mem = (uint8_t*)bx::allocPtr(_ctx->m_AllocatorBlk, totalMem, 16);
 	mesh->m_Pos = (float*)mem;
 	mem += alignSize(sizeof(float) * 2 * _numVertices, 16);
 
@@ -5205,15 +5151,15 @@ static void clCacheRender(Context* _ctx, CommandList* _cl)
 	VG_CHECK(firstImagePatternID + numImagePatterns <= _ctx->m_Config.maxImagePatterns, "Not enough free image patterns for command list. Increase Init::maxImagePatterns");
 	BX_UNUSED(numGradients, numImagePatterns); // For Release builds.
 
-	const uint8_t* cmd = _cl->m_CommandBuffer;
-	const uint8_t* cmdListEnd = _cl->m_CommandBuffer + _cl->m_CommandBufferPos;
+	const uint8_t* cmd = _cl->m_CommandBuffer.getPtr();
+	const uint8_t* cmdListEnd = _cl->m_CommandBuffer.getPtr(_cl->m_CommandBufferPos);
 	if (cmd == cmdListEnd)
 	{
 		return;
 	}
 
-	const char* stringBuffer = _cl->m_StringBuffer;
-	CachedCommand* nextCachedCommand = &clCache->m_Commands[0];
+	const char* stringBuffer = _cl->m_StringBuffer.getPtr();
+	CachedCommand* nextCachedCommand = clCache->m_Commands.getPtr(0);
 
 	bool skipCmds = false;
 
@@ -5249,7 +5195,7 @@ static void clCacheRender(Context* _ctx, CommandList* _cl)
 			const uint32_t flags = CMD_READ(cmd, uint32_t);
 			const Color color = CMD_READ(cmd, Color);
 			BX_UNUSED(flags);
-			submitCachedMesh(_ctx, color, &clCache->m_Meshes[nextCachedCommand->m_FirstMeshID], nextCachedCommand->m_NumMeshes);
+			submitCachedMesh(_ctx, color, clCache->m_Meshes.getPtr(nextCachedCommand->m_FirstMeshID), nextCachedCommand->m_NumMeshes);
 			++nextCachedCommand;
 		} break;
 		case CommandType::FillPathGradient:
@@ -5260,7 +5206,7 @@ static void clCacheRender(Context* _ctx, CommandList* _cl)
 			BX_UNUSED(flags);
 
 			const GradientHandle gradient = { isLocal(gradientFlags) ? (uint16_t)(gradientHandle + firstGradientID) : gradientHandle, 0 };
-			submitCachedMesh(_ctx, gradient, &clCache->m_Meshes[nextCachedCommand->m_FirstMeshID], nextCachedCommand->m_NumMeshes);
+			submitCachedMesh(_ctx, gradient, clCache->m_Meshes.getPtr(nextCachedCommand->m_FirstMeshID), nextCachedCommand->m_NumMeshes);
 			++nextCachedCommand;
 		} break;
 		case CommandType::FillPathImagePattern:
@@ -5272,7 +5218,7 @@ static void clCacheRender(Context* _ctx, CommandList* _cl)
 			BX_UNUSED(flags);
 
 			const ImagePatternHandle imgPattern = { isLocal(imgPatternFlags) ? (uint16_t)(imgPatternHandle + firstImagePatternID) : imgPatternHandle, 0 };
-			submitCachedMesh(_ctx, imgPattern, color, &clCache->m_Meshes[nextCachedCommand->m_FirstMeshID], nextCachedCommand->m_NumMeshes);
+			submitCachedMesh(_ctx, imgPattern, color, clCache->m_Meshes.getPtr(nextCachedCommand->m_FirstMeshID), nextCachedCommand->m_NumMeshes);
 			++nextCachedCommand;
 		} break;
 		case CommandType::StrokePathColor:
@@ -5282,7 +5228,7 @@ static void clCacheRender(Context* _ctx, CommandList* _cl)
 			const Color color = CMD_READ(cmd, Color);
 			BX_UNUSED(flags, width);
 
-			submitCachedMesh(_ctx, color, &clCache->m_Meshes[nextCachedCommand->m_FirstMeshID], nextCachedCommand->m_NumMeshes);
+			submitCachedMesh(_ctx, color, clCache->m_Meshes.getPtr(nextCachedCommand->m_FirstMeshID), nextCachedCommand->m_NumMeshes);
 			++nextCachedCommand;
 		} break;
 		case CommandType::StrokePathGradient:
@@ -5294,7 +5240,7 @@ static void clCacheRender(Context* _ctx, CommandList* _cl)
 			BX_UNUSED(flags, width);
 
 			const GradientHandle gradient = { isLocal(gradientFlags) ? (uint16_t)(gradientHandle + firstGradientID) : gradientHandle, 0 };
-			submitCachedMesh(_ctx, gradient, &clCache->m_Meshes[nextCachedCommand->m_FirstMeshID], nextCachedCommand->m_NumMeshes);
+			submitCachedMesh(_ctx, gradient, clCache->m_Meshes.getPtr(nextCachedCommand->m_FirstMeshID), nextCachedCommand->m_NumMeshes);
 			++nextCachedCommand;
 		} break;
 		case CommandType::StrokePathImagePattern:
@@ -5307,7 +5253,7 @@ static void clCacheRender(Context* _ctx, CommandList* _cl)
 			BX_UNUSED(flags, width);
 
 			const ImagePatternHandle imgPattern = { isLocal(imgPatternFlags) ? (uint16_t)(imgPatternHandle + firstImagePatternID) : imgPatternHandle, 0 };
-			submitCachedMesh(_ctx, imgPattern, color, &clCache->m_Meshes[nextCachedCommand->m_FirstMeshID], nextCachedCommand->m_NumMeshes);
+			submitCachedMesh(_ctx, imgPattern, color, clCache->m_Meshes.getPtr(nextCachedCommand->m_FirstMeshID), nextCachedCommand->m_NumMeshes);
 			++nextCachedCommand;
 		} break;
 		case CommandType::IndexedTriList:
@@ -5505,18 +5451,22 @@ static void clCacheRender(Context* _ctx, CommandList* _cl)
 
 static void clCacheReset(Context* _ctx, CommandListCache* _cache)
 {
-	bx::AllocatorI* allocator = _ctx->m_Allocator;
+	BX_UNUSED(_ctx);
 
 	const uint32_t numMeshes = _cache->m_NumMeshes;
 	for (uint32_t ii = 0; ii < numMeshes; ++ii)
 	{
-		CachedMesh* mesh = &_cache->m_Meshes[ii];
-		bx::alignedFree(allocator, mesh->m_Pos, 16);
+		CachedMesh* mesh = _cache->m_Meshes.getPtr(ii);
+		bx::freePtr(mesh->m_Pos);
 	}
-	bx::free(allocator, _cache->m_Meshes);
-	bx::free(allocator, _cache->m_Commands);
 
-	bx::memSet(_cache, 0, sizeof(CommandListCache));
+	_cache->m_Meshes.clear();
+	_cache->m_Meshes.setCapacity(0);
+	_cache->m_NumMeshes = 0;
+	_cache->m_Commands.clear();
+	_cache->m_Commands.setCapacity(0);
+	_cache->m_NumCommands = 0;
+	_cache->m_AvgScale = 0.0f;
 }
 
 static void submitCachedMesh(Context* _ctx, Color _col, const CachedMesh* _meshList, uint32_t _numMeshes)
@@ -5609,7 +5559,7 @@ static void releaseVertexBufferPosCallback(void* _ptr, void* _userData)
 #if BX_CONFIG_SUPPORTS_THREADING
 	bx::MutexScope ms(*ctx->m_DataPoolMutex);
 #endif // BX_CONFIG_SUPPORTS_THREADING
-	bx::free(ctx->m_PosBufferPool, _ptr);
+	ctx->m_PosBufferPool->free(_ptr);
 }
 
 static void releaseVertexBufferColorCallback(void* _ptr, void* _userData)
@@ -5618,7 +5568,7 @@ static void releaseVertexBufferColorCallback(void* _ptr, void* _userData)
 #if BX_CONFIG_SUPPORTS_THREADING
 	bx::MutexScope ms(*ctx->m_DataPoolMutex);
 #endif // BX_CONFIG_SUPPORTS_THREADING
-	bx::free(ctx->m_ColorBufferPool, _ptr);
+	ctx->m_ColorBufferPool->free(_ptr);
 }
 
 static void releaseVertexBufferUVCallback(void* _ptr, void* _userData)
@@ -5627,7 +5577,7 @@ static void releaseVertexBufferUVCallback(void* _ptr, void* _userData)
 #if BX_CONFIG_SUPPORTS_THREADING
 	bx::MutexScope ms(*ctx->m_DataPoolMutex);
 #endif // BX_CONFIG_SUPPORTS_THREADING
-	bx::free(ctx->m_UVBufferPool, _ptr);
+	ctx->m_UVBufferPool->free(_ptr);
 }
 
 static void releaseIndexBufferCallback(void* _ptr, void* _userData)

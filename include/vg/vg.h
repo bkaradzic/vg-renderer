@@ -74,7 +74,7 @@
 
 namespace bx
 {
-struct AllocatorI;
+struct AllocatorHandle;
 }
 
 namespace bgfx
@@ -380,7 +380,7 @@ struct FontFlags
 	};
 };
 
-bool init(bx::AllocatorI* _allocator, const Init* _init = NULL);
+bool init(bx::AllocatorHandle _allocator, const Init* _init = NULL);
 void shutdown();
 
 void begin(uint16_t _viewID, uint16_t _canvasWidth, uint16_t _canvasHeight, float _devicePixelRatio);

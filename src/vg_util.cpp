@@ -565,83 +565,41 @@ void convertA8_to_RGBA8(uint32_t* rgba, const uint8_t* a8, uint32_t w, uint32_t 
 	}
 }
 
-PoolAllocator::PoolAllocator(uint32_t itemSize, uint32_t numItemsPerChunk, bx::AllocatorI* parentAllocator)
-	: m_ParentAllocator(parentAllocator)
-	, m_FirstChunk(nullptr)
+PoolAllocator::PoolAllocator(bx::AllocatorHandle allocator, uint32_t itemSize, uint32_t numItemsPerChunk)
+	: m_Chunks(allocator)
 	, m_FirstFreeSlotPtr(nullptr)
 	, m_ItemSize(itemSize)
 	, m_NumItemsPerChunk(numItemsPerChunk)
-	, m_Flags(0)
 {
 }
 
 PoolAllocator::~PoolAllocator()
 {
-	PoolAllocator::Chunk* chunk = m_FirstChunk;
-
-	while (chunk != nullptr)
+	for (uint32_t ii = 0, num = m_Chunks.getCount(); ii < num; ++ii)
 	{
-		PoolAllocator::Chunk* nextChunk = chunk->m_Next;
-		bx::free(m_ParentAllocator, chunk);
-		chunk = nextChunk;
+		m_Chunks[ii] = bx::free(bx::move(m_Chunks[ii]));
 	}
-
-	m_FirstChunk       = nullptr;
-	m_FirstFreeSlotPtr = nullptr;
 }
 
-void* PoolAllocator::realloc(void* _ptr, size_t _size, size_t _align, const char* _filePath, uint32_t _line)
+void PoolAllocator::free(void* ptr)
 {
-	BX_UNUSED(_align, _filePath, _line);
-	VG_CHECK(align <= 8, "Pool allocators do not support alignment.", 0);
+	FreeListItem* freeSlot = (FreeListItem*)ptr;
+	freeSlot->m_Next = m_FirstFreeSlotPtr;
+	m_FirstFreeSlotPtr = freeSlot;
+}
 
-	if (_ptr != nullptr) {
-		// Realloc or free?
-		if (_size != 0) {
-			VG_CHECK(false, "Pool allocators do not support reallocations.", 0);
-			return nullptr;
-		}
-
-		// Free item
-		FreeListItem* freeSlot = (FreeListItem*)_ptr;
-		freeSlot->m_Next = m_FirstFreeSlotPtr;
-		m_FirstFreeSlotPtr = freeSlot;
-
-		return nullptr;
-	}
-
-	// Alloc
-	if ((uint32_t)_size != m_ItemSize) {
-		VG_CHECK(false, "Pool allocators cannot allocate arbitrary amounts of memory.", 0);
-		return nullptr;
-	}
-
+void* PoolAllocator::alloc()
+{
 	FreeListItem* freeSlot = m_FirstFreeSlotPtr;
 	if (freeSlot == nullptr) {
-#if 0
-		if ((m_Flags & POOL_ALLOCATOR_FLAGS_ALLOW_RESIZE) == 0) {
-			return nullptr;
-		}
-#endif
-
-		const size_t totalMem = 0
-			+ sizeof(PoolAllocator::Chunk)
-			+ (size_t)m_ItemSize * (size_t)m_NumItemsPerChunk
-			;
-
-		uint8_t* newBuffer = (uint8_t*)bx::alloc(m_ParentAllocator, totalMem);
-		if (!newBuffer) {
+		bx::Blk chunk = bx::alloc(m_Chunks.getAllocatorHandle(), (size_t)m_ItemSize * (size_t)m_NumItemsPerChunk);
+		if (!bx::isValid(chunk)) {
 			// Couldn't allocate new chunk. Allocation failed.
 			return nullptr;
 		}
 
-		uint8_t* newBufferPtr = newBuffer;
-		PoolAllocator::Chunk* poolAllocatorChunk = (PoolAllocator::Chunk*)newBufferPtr;
-		newBufferPtr += sizeof(PoolAllocator::Chunk);
-
-		poolAllocatorChunk->m_Buffer = newBufferPtr;
-		poolAllocatorChunk->m_Next = m_FirstChunk;
-		m_FirstChunk = poolAllocatorChunk;
+		uint8_t* newBufferPtr = (uint8_t*)chunk;
+		m_Chunks.add(bx::move(chunk));
 
 		// Initialize free list
 		const uint32_t itemSize = m_ItemSize;
@@ -657,7 +615,7 @@ void* PoolAllocator::realloc(void* _ptr, size_t _size, size_t _align, const char
 			fli->m_Next = nullptr;
 		}
 
-		m_FirstFreeSlotPtr = (FreeListItem*)poolAllocatorChunk->m_Buffer;
+		m_FirstFreeSlotPtr = (FreeListItem*)newBufferPtr;
 
 		freeSlot = m_FirstFreeSlotPtr;
 	}
