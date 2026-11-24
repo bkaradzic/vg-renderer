@@ -10,7 +10,6 @@
 #include <bx/array.h>
 #include <bx/blk.h>
 #include <bx/math.h>
-#include <string.h> // memcpy
 
 BX_PRAGMA_DIAGNOSTIC_IGNORED_MSVC(4127) // conditional expression is constant
 BX_PRAGMA_DIAGNOSTIC_IGNORED_MSVC(4456) // declaration of X hides previous local decleration
@@ -2390,7 +2389,7 @@ static void addPos(Stroker* stroker, const Vec2* srcPos)
 	VG_CHECK(stroker->m_NumVertices + N <= stroker->m_PosBuffer.getCount(), "Not enough free space for temporary geometry");
 
 	float* dstPos = &stroker->m_PosBuffer.getPtr(stroker->m_NumVertices)->x;
-	memcpy(dstPos, srcPos, sizeof(Vec2) * N);
+	bx::memCopy(dstPos, srcPos, sizeof(Vec2) * N);
 
 	stroker->m_NumVertices += N;
 }
@@ -2401,10 +2400,10 @@ static void addPosColor(Stroker* stroker, const Vec2* srcPos, const uint32_t* sr
 	VG_CHECK(stroker->m_NumVertices + N <= stroker->m_PosBuffer.getCount(), "Not enough free space for temporary geometry");
 
 	float* dstPos = &stroker->m_PosBuffer.getPtr(stroker->m_NumVertices)->x;
-	memcpy(dstPos, srcPos, sizeof(Vec2) * N);
+	bx::memCopy(dstPos, srcPos, sizeof(Vec2) * N);
 
 	uint32_t* dstColor = stroker->m_ColorBuffer.getPtr(stroker->m_NumVertices);
-	memcpy(dstColor, srcColor, sizeof(uint32_t) * N);
+	bx::memCopy(dstColor, srcColor, sizeof(uint32_t) * N);
 
 	stroker->m_NumVertices += N;
 }
@@ -2415,7 +2414,7 @@ static void addIndices(Stroker* stroker, const uint16_t* src)
 	VG_CHECK(stroker->m_NumIndices + N <= stroker->m_IndexBuffer.getCount(), "Not enough free space for temporary geometry");
 
 	uint16_t* dst = stroker->m_IndexBuffer.getPtr(stroker->m_NumIndices);
-	memcpy(dst, src, sizeof(uint16_t) * N);
+	bx::memCopy(dst, src, sizeof(uint16_t) * N);
 
 	stroker->m_NumIndices += N;
 }

@@ -165,6 +165,21 @@ struct IndexBuffer
 	uint32_t m_Count;
 };
 
+struct Context;
+
+struct SharedBuffers
+{
+	Context* m_Context;
+	vgutil::PoolAllocator* m_PosBufferPool;
+	vgutil::PoolAllocator* m_ColorBufferPool;
+	vgutil::PoolAllocator* m_UVBufferPool;
+#if BX_CONFIG_SUPPORTS_THREADING
+	bx::Mutex* m_DataPoolMutex;
+#endif // BX_CONFIG_SUPPORTS_THREADING
+	bx::ArrayT<IndexBuffer>* m_IndexBuffers;
+	uint32_t m_NumPending;
+};
+
 struct Image
 {
 	uint16_t m_Width;
@@ -330,6 +345,7 @@ struct Context
 #if BX_CONFIG_SUPPORTS_THREADING
 	bx::Mutex* m_DataPoolMutex;
 #endif // BX_CONFIG_SUPPORTS_THREADING
+	SharedBuffers* m_SharedBuffers;
 
 	bx::ArrayT<Image> m_Images;
 	bx::DynamicHandleAlloc* m_ImageHandleAlloc;
@@ -505,6 +521,9 @@ static void releaseVertexBufferUVCallback(void* _ptr, void* _userData);
 static uint16_t allocIndexBuffer(Context* _ctx);
 static void releaseIndexBuffer(Context* _ctx, uint16_t* _data);
 static void releaseIndexBufferCallback(void* _ptr, void* _userData);
+static void addPendingBuffers(SharedBuffers* _shared, uint32_t _num);
+static void releaseSharedBuffer(SharedBuffers* _shared, vgutil::PoolAllocator* _pool, void* _ptr);
+static void destroySharedBuffers(SharedBuffers* _shared);
 
 static DrawCommand* allocDrawCommand(Context* _ctx, uint32_t _numVertices, uint32_t _numIndices, DrawCommand::Type::Enum _type, uint16_t _handle);
 static DrawCommand* allocClipCommand(Context* _ctx, uint32_t _numVertices, uint32_t _numIndices);
@@ -642,6 +661,18 @@ bool Context::init(bx::AllocatorHandle _allocator, const Init* _cfg)
 #if BX_CONFIG_SUPPORTS_THREADING
 	m_DataPoolMutex = BX_NEW_PTR(m_AllocatorBlk, bx::Mutex)();
 #endif // BX_CONFIG_SUPPORTS_THREADING
+
+	m_SharedBuffers = BX_NEW_PTR(m_AllocatorBlk, SharedBuffers)();
+	m_SharedBuffers->m_Context = this;
+	m_SharedBuffers->m_PosBufferPool = m_PosBufferPool;
+	m_SharedBuffers->m_ColorBufferPool = m_ColorBufferPool;
+	m_SharedBuffers->m_UVBufferPool = m_UVBufferPool;
+#if BX_CONFIG_SUPPORTS_THREADING
+	m_SharedBuffers->m_DataPoolMutex = m_DataPoolMutex;
+#endif // BX_CONFIG_SUPPORTS_THREADING
+	m_SharedBuffers->m_IndexBuffers = NULL;
+	m_SharedBuffers->m_NumPending = 0;
+
 	m_Path = createPath(_allocator);
 	m_Stroker = createStroker(_allocator);
 
@@ -767,15 +798,6 @@ void Context::shutdown()
 	}
 	m_ActiveIndexBufferID = UINT16_MAX;
 
-	bx::deletePtr(m_UVBufferPool);
-	m_UVBufferPool = NULL;
-
-	bx::deletePtr(m_ColorBufferPool);
-	m_ColorBufferPool = NULL;
-
-	bx::deletePtr(m_PosBufferPool);
-	m_PosBufferPool = NULL;
-
 	if (m_FontSystem)
 	{
 		fsDestroy(m_FontSystem, this);
@@ -803,9 +825,26 @@ void Context::shutdown()
 	destroyStroker(m_Stroker);
 	m_Stroker = NULL;
 
+	SharedBuffers* shared = m_SharedBuffers;
+	bool destroy;
+	{
 #if BX_CONFIG_SUPPORTS_THREADING
-	bx::deletePtr(m_DataPoolMutex);
+		bx::MutexScope ms(*shared->m_DataPoolMutex);
 #endif // BX_CONFIG_SUPPORTS_THREADING
+
+		shared->m_Context = NULL;
+		destroy = shared->m_NumPending == 0;
+
+		if (!destroy)
+		{
+			shared->m_IndexBuffers = BX_NEW_PTR(m_AllocatorBlk, bx::ArrayT<IndexBuffer>)(bx::move(m_IndexBuffers));
+		}
+	}
+
+	if (destroy)
+	{
+		destroySharedBuffers(shared);
+	}
 
 	s_ctx = NULL;
 	bx::deletePtr(this);
@@ -899,9 +938,11 @@ void Context::end()
 			gpuvb->m_ColorBufferHandle = bgfx::createDynamicVertexBuffer(maxVBVertices, m_ColorVertexDecl, 0);
 		}
 
-		const bgfx::Memory* posMem = bgfx::makeRef(vb->m_Pos, sizeof(float) * 2 * vb->m_Count, releaseVertexBufferPosCallback, this);
-		const bgfx::Memory* colorMem = bgfx::makeRef(vb->m_Color, sizeof(uint32_t) * vb->m_Count, releaseVertexBufferColorCallback, this);
-		const bgfx::Memory* uvMem = bgfx::makeRef(vb->m_UV, sizeof(uv_t) * 2 * vb->m_Count, releaseVertexBufferUVCallback, this);
+		addPendingBuffers(m_SharedBuffers, 3);
+
+		const bgfx::Memory* posMem = bgfx::makeRef(vb->m_Pos, sizeof(float) * 2 * vb->m_Count, releaseVertexBufferPosCallback, m_SharedBuffers);
+		const bgfx::Memory* colorMem = bgfx::makeRef(vb->m_Color, sizeof(uint32_t) * vb->m_Count, releaseVertexBufferColorCallback, m_SharedBuffers);
+		const bgfx::Memory* uvMem = bgfx::makeRef(vb->m_UV, sizeof(uv_t) * 2 * vb->m_Count, releaseVertexBufferUVCallback, m_SharedBuffers);
 
 		bgfx::update(gpuvb->m_PosBufferHandle, 0, posMem);
 		bgfx::update(gpuvb->m_UVBufferHandle, 0, uvMem);
@@ -915,7 +956,8 @@ void Context::end()
 	// Update bgfx index buffer...
 	IndexBuffer* ib = &m_IndexBuffers[m_ActiveIndexBufferID];
 	GPUIndexBuffer* gpuib = &m_GPUIndexBuffers[m_ActiveIndexBufferID];
-	const bgfx::Memory* indexMem = bgfx::makeRef(ib->m_Indices.getPtr(), sizeof(uint16_t) * ib->m_Count, releaseIndexBufferCallback, this);
+	addPendingBuffers(m_SharedBuffers, 1);
+	const bgfx::Memory* indexMem = bgfx::makeRef(ib->m_Indices.getPtr(), sizeof(uint16_t) * ib->m_Count, releaseIndexBufferCallback, m_SharedBuffers);
 	if (!bgfx::isValid(gpuib->m_bgfxHandle))
 	{
 		gpuib->m_bgfxHandle = bgfx::createDynamicIndexBuffer(indexMem, BGFX_BUFFER_ALLOW_RESIZE);
@@ -4549,10 +4591,6 @@ static uint16_t allocIndexBuffer(Context* _ctx)
 
 static void releaseIndexBuffer(Context* _ctx, uint16_t* _data)
 {
-#if BX_CONFIG_SUPPORTS_THREADING
-	bx::MutexScope ms(*_ctx->m_DataPoolMutex);
-#endif // BX_CONFIG_SUPPORTS_THREADING
-
 	VG_CHECK(_data != NULL, "Tried to release a null vertex buffer");
 	const uint32_t numIB = _ctx->m_IndexBuffers.getCount();
 	for (uint32_t ii = 0; ii < numIB; ++ii)
@@ -4610,6 +4648,11 @@ static void createDrawCommand_VertexColor(Context* _ctx, const float* _vtx, uint
 
 static void createDrawCommand_ImagePattern(Context* _ctx, ImagePatternHandle _imgPatternHandle, const float* _vtx, uint32_t _numVertices, const uint32_t* _colors, uint32_t _numColors, const uint16_t* _indices, uint32_t _numIndices)
 {
+	if (_imgPatternHandle.idx >= _ctx->m_NextImagePatternID)
+	{
+		return;
+	}
+
 	DrawCommand* cmd = allocDrawCommand(_ctx, _numVertices, _numIndices, DrawCommand::Type::ImagePattern, _imgPatternHandle.idx);
 
 	VertexBuffer* vb = &_ctx->m_VertexBuffers[cmd->m_VertexBufferID];
@@ -4639,6 +4682,11 @@ static void createDrawCommand_ImagePattern(Context* _ctx, ImagePatternHandle _im
 
 static void createDrawCommand_ColorGradient(Context* _ctx, GradientHandle _gradientHandle, const float* _vtx, uint32_t _numVertices, const uint32_t* _colors, uint32_t _numColors, const uint16_t* _indices, uint32_t _numIndices)
 {
+	if (_gradientHandle.idx >= _ctx->m_NextGradientID)
+	{
+		return;
+	}
+
 	DrawCommand* cmd = allocDrawCommand(_ctx, _numVertices, _numIndices, DrawCommand::Type::ColorGradient, _gradientHandle.idx);
 
 	VertexBuffer* vb = &_ctx->m_VertexBuffers[cmd->m_VertexBufferID];
@@ -5555,34 +5603,78 @@ static void submitCachedMesh(Context* _ctx, ImagePatternHandle _imgPattern, Colo
 
 static void releaseVertexBufferPosCallback(void* _ptr, void* _userData)
 {
-	Context* ctx = (Context*)_userData;
-#if BX_CONFIG_SUPPORTS_THREADING
-	bx::MutexScope ms(*ctx->m_DataPoolMutex);
-#endif // BX_CONFIG_SUPPORTS_THREADING
-	ctx->m_PosBufferPool->free(_ptr);
+	SharedBuffers* shared = (SharedBuffers*)_userData;
+	releaseSharedBuffer(shared, shared->m_PosBufferPool, _ptr);
 }
 
 static void releaseVertexBufferColorCallback(void* _ptr, void* _userData)
 {
-	Context* ctx = (Context*)_userData;
-#if BX_CONFIG_SUPPORTS_THREADING
-	bx::MutexScope ms(*ctx->m_DataPoolMutex);
-#endif // BX_CONFIG_SUPPORTS_THREADING
-	ctx->m_ColorBufferPool->free(_ptr);
+	SharedBuffers* shared = (SharedBuffers*)_userData;
+	releaseSharedBuffer(shared, shared->m_ColorBufferPool, _ptr);
 }
 
 static void releaseVertexBufferUVCallback(void* _ptr, void* _userData)
 {
-	Context* ctx = (Context*)_userData;
-#if BX_CONFIG_SUPPORTS_THREADING
-	bx::MutexScope ms(*ctx->m_DataPoolMutex);
-#endif // BX_CONFIG_SUPPORTS_THREADING
-	ctx->m_UVBufferPool->free(_ptr);
+	SharedBuffers* shared = (SharedBuffers*)_userData;
+	releaseSharedBuffer(shared, shared->m_UVBufferPool, _ptr);
 }
 
 static void releaseIndexBufferCallback(void* _ptr, void* _userData)
 {
-	Context* ctx = (Context*)_userData;
-	releaseIndexBuffer(ctx, (uint16_t*)_ptr);
+	SharedBuffers* shared = (SharedBuffers*)_userData;
+	releaseSharedBuffer(shared, NULL, _ptr);
+}
+
+static void addPendingBuffers(SharedBuffers* _shared, uint32_t _num)
+{
+#if BX_CONFIG_SUPPORTS_THREADING
+	bx::MutexScope ms(*_shared->m_DataPoolMutex);
+#endif // BX_CONFIG_SUPPORTS_THREADING
+	_shared->m_NumPending += _num;
+}
+
+static void releaseSharedBuffer(SharedBuffers* _shared, vgutil::PoolAllocator* _pool, void* _ptr)
+{
+	bool destroy;
+	{
+#if BX_CONFIG_SUPPORTS_THREADING
+		bx::MutexScope ms(*_shared->m_DataPoolMutex);
+#endif // BX_CONFIG_SUPPORTS_THREADING
+
+		if (_pool != NULL)
+		{
+			_pool->free(_ptr);
+		}
+		else if (_shared->m_Context != NULL)
+		{
+			releaseIndexBuffer(_shared->m_Context, (uint16_t*)_ptr);
+		}
+
+		--_shared->m_NumPending;
+		destroy = _shared->m_NumPending == 0 && _shared->m_Context == NULL;
+	}
+
+	if (destroy)
+	{
+		destroySharedBuffers(_shared);
+	}
+}
+
+static void destroySharedBuffers(SharedBuffers* _shared)
+{
+	bx::deletePtr(_shared->m_UVBufferPool);
+	bx::deletePtr(_shared->m_ColorBufferPool);
+	bx::deletePtr(_shared->m_PosBufferPool);
+
+	if (_shared->m_IndexBuffers != NULL)
+	{
+		bx::deletePtr(_shared->m_IndexBuffers);
+	}
+
+#if BX_CONFIG_SUPPORTS_THREADING
+	bx::deletePtr(_shared->m_DataPoolMutex);
+#endif // BX_CONFIG_SUPPORTS_THREADING
+
+	bx::deletePtr(_shared);
 }
 } // namespace vg
